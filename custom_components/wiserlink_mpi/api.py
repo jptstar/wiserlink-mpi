@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from aiohttp import BasicAuth, ClientError, ClientSession
@@ -35,9 +36,46 @@ class WiserLinkClient:
     async def async_get_usage_meters(self) -> dict[str, Any]:
         """Read all meters in one request."""
         result = await self._request("GET", USAGE_METER_PATH)
-        if not isinstance(result, dict) or not isinstance(result.get("UsageMeterList"), list):
+        if not isinstance(result, dict) or not isinstance(
+            result.get("UsageMeterList"), list
+        ):
             raise WiserLinkError("Réponse UsageMeter invalide")
+        self._validate_usage_meters(result["UsageMeterList"])
         return result
+
+    @staticmethod
+    def _validate_usage_meters(meters: list[Any]) -> None:
+        """Reject a corrupted snapshot without replacing known good values."""
+        if not meters:
+            raise WiserLinkError("La réponse UsageMeter ne contient aucune voie")
+
+        valid_value_found = False
+        for index, meter in enumerate(meters):
+            if not isinstance(meter, dict):
+                raise WiserLinkError(f"Voie {index + 1} invalide")
+
+            for field in ("Power", "EnergyConsumed"):
+                value = meter.get(field)
+                if value is None:
+                    continue
+                try:
+                    numeric_value = Decimal(str(value))
+                except (InvalidOperation, TypeError, ValueError) as err:
+                    raise WiserLinkError(
+                        f"Valeur {field} invalide pour la voie {index + 1}"
+                    ) from err
+                if not numeric_value.is_finite():
+                    raise WiserLinkError(
+                        f"Valeur {field} non finie pour la voie {index + 1}"
+                    )
+                if field == "EnergyConsumed" and numeric_value < 0:
+                    raise WiserLinkError(
+                        f"Index d’énergie négatif pour la voie {index + 1}"
+                    )
+                valid_value_found = True
+
+        if not valid_value_found:
+            raise WiserLinkError("La réponse UsageMeter ne contient aucune mesure")
 
     async def async_send_command(
         self, method: str, path: str, payload: dict[str, Any] | None

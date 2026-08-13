@@ -27,6 +27,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - intervalle d’actualisation réglable de 2 à 300 secondes ;
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
+- rejet des valeurs reçues lors d’une erreur ou d’une réponse corrompue ;
 - entité **MPI Online** ;
 - modules gaz et eau optionnels, désactivés par défaut.
 
