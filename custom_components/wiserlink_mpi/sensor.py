@@ -113,6 +113,10 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
         self._attr_native_unit_of_measurement = metric.unit
         self._attr_device_class = metric.device_class
         self._attr_state_class = metric.state_class
+        if index == 10:
+            self._attr_icon = "mdi:meter-gas"
+        elif index == 11:
+            self._attr_icon = "mdi:water"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
             name="WiserLink MPI",
