@@ -1,12 +1,12 @@
 {
   "domain": "wiserlink_mpi",
   "name": "WiserLink MPI",
-  "version": "0.5.1",
+  "codeowners": ["@jptstar"],
   "config_flow": true,
   "documentation": "https://github.com/jptstar/wiserlink-mpi",
-  "issue_tracker": "https://github.com/jptstar/wiserlink-mpi/issues",
-  "codeowners": ["@jptstar"],
-  "iot_class": "local_polling",
   "integration_type": "hub",
-  "requirements": []
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/jptstar/wiserlink-mpi/issues",
+  "requirements": [],
+  "version": "0.5.1"
 }
