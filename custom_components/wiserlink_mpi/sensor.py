@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower
+from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -36,6 +36,23 @@ METRICS = (
     Metric("Power", "Puissance", UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
     Metric("EnergyConsumed", "Énergie", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING),
 )
+
+WATER_METRICS = (
+    Metric(
+        "EnergyConsumed",
+        "Volume",
+        UnitOfVolume.CUBIC_METERS,
+        SensorDeviceClass.VOLUME,
+        SensorStateClass.TOTAL_INCREASING,
+    ),
+)
+
+
+def _metrics_for_meter(index: int) -> tuple[Metric, ...]:
+    """Return metrics matching the physical type of a meter."""
+    if index == 11:
+        return WATER_METRICS
+    return METRICS
 
 
 def _optional_meter_enabled(entry: ConfigEntry, index: int) -> bool:
@@ -67,7 +84,7 @@ async def async_setup_entry(
         WiserLinkSensor(coordinator, entry, index, metric)
         for index, meter in enumerate(meters)
         if _optional_meter_enabled(entry, index)
-        for metric in METRICS
+        for metric in _metrics_for_meter(index)
         if isinstance(meter, dict) and metric.field in meter
     )
 
