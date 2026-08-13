@@ -2,6 +2,8 @@
 
 Intégration locale installable via HACS, dérivée du flux Node-RED fourni. Elle interroge directement `GET /vesta/UsageMeter` avec l’authentification Basic du MPI. Aucun MQTT ni Node-RED n’est nécessaire.
 
+[![Ouvrir HACS dans Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jptstar&repository=wiserlink-mpi&category=integration)
+
 ## Fonctions
 
 - une seule lecture coordonnée du bus toutes les 5 secondes (réglable de 2 à 300 s) ;
