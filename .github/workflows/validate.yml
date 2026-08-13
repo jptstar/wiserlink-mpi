@@ -18,4 +18,10 @@ jobs:
   hassfest:
     runs-on: ubuntu-latest
     steps:
-      - uses: home-assistant/actions/hassfest@master
+      - uses: actions/checkout@v4
+      - name: Hassfest
+        run: >-
+          docker run --rm
+          -v "${{ github.workspace }}/custom_components:/github/workspace/custom_components:ro"
+          ghcr.io/home-assistant/hassfest
+          --integration-path /github/workspace/custom_components/wiserlink_mpi
