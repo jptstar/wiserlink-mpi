@@ -8,9 +8,15 @@ Intégration locale pour WiserLink MPI / Wiser Energy EER31600 et EER39300.
 
 > Intégration communautaire non officielle, sans affiliation avec Schneider Electric.
 
-**Auteur :** [jptstar](https://github.com/jptstar)
-
 [![Ouvrir HACS dans Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jptstar&repository=wiserlink-mpi&category=integration)
+
+## À propos de ce projet
+
+J’ai initialement développé cette intégration par plaisir et pour ma propre installation Home Assistant. Comme de nombreux propriétaires rencontrent des difficultés pour accéder localement aux données de leur WiserLink MPI, je la mets à disposition afin que d’autres puissent également en profiter.
+
+## Auteur
+
+**Jean-Philippe TESTART** ([jptstar](https://github.com/jptstar))
 
 ## Fonctions
 
