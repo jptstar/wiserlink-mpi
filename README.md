@@ -20,7 +20,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 
 ## Fonctions
 
-- lecture locale de `/vesta/UsageMeter` sans MQTT ni Node-RED ;
+- lecture locale de `/vesta/UsageMeter` ;
 - capteurs de puissance et d’énergie par voie ;
 - adresse IP, port, identifiants et noms des voies personnalisables ;
 - noms génériques par défaut (`Voie 1`, `Voie 2`, etc.) ;
