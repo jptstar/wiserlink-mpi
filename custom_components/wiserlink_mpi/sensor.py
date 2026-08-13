@@ -37,7 +37,7 @@ METRICS = (
     Metric("EnergyConsumed", "Énergie", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING),
 )
 
-WATER_METRICS = (
+FLUID_METRICS = (
     Metric(
         "EnergyConsumed",
         "Volume",
@@ -50,8 +50,8 @@ WATER_METRICS = (
 
 def _metrics_for_meter(index: int) -> tuple[Metric, ...]:
     """Return metrics matching the physical type of a meter."""
-    if index == 11:
-        return WATER_METRICS
+    if index in (10, 11):
+        return FLUID_METRICS
     return METRICS
 
 

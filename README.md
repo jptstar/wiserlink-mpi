@@ -48,7 +48,7 @@ Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe es
 
 ## Gaz et eau
 
-Le gaz et l’eau nécessitent des modules optionnels. Leur absence n’entraîne aucune erreur et n’affecte pas les capteurs électriques ni l’état **MPI Online**. Le module eau est exposé comme un volume cumulé en mètres cubes (`m³`).
+Le gaz et l’eau nécessitent des modules optionnels. Leur absence n’entraîne aucune erreur et n’affecte pas les capteurs électriques ni l’état **MPI Online**. Les modules gaz et eau sont exposés comme des volumes cumulés en mètres cubes (`m³`).
 
 ## Écriture
 
