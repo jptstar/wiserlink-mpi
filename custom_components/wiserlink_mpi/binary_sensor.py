@@ -4,6 +4,7 @@ from homeassistant.components.binary_sensor import BinarySensorDeviceClass, Bina
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -26,6 +27,7 @@ class WiserLinkOnlineSensor(CoordinatorEntity[WiserLinkCoordinator], BinarySenso
     _attr_has_entity_name = True
     _attr_name = "MPI Online"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: WiserLinkCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)

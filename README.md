@@ -28,7 +28,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
 - rejet des valeurs reçues lors d’une erreur ou d’une réponse corrompue ;
-- entité **MPI Online** ;
+- entité **MPI Online** classée dans les diagnostics ;
 - modules gaz et eau optionnels, désactivés par défaut.
 
 ## Installation avec HACS
