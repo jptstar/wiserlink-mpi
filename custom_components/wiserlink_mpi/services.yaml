@@ -1,0 +1,34 @@
+send_command:
+  name: Envoyer une commande
+  description: Envoie une écriture HTTP explicite vers un endpoint Vesta du MPI.
+  fields:
+    entry_id:
+      name: Configuration
+      description: Identifiant de la configuration WiserLink MPI.
+      required: true
+      selector:
+        config_entry:
+          integration: wiserlink_mpi
+    method:
+      name: Méthode
+      required: true
+      default: POST
+      selector:
+        select:
+          options:
+            - POST
+            - PUT
+            - PATCH
+    path:
+      name: Chemin Vesta
+      description: Chemin local documenté, commençant par /vesta/.
+      required: true
+      example: /vesta/Example
+      selector:
+        text:
+    payload:
+      name: Données JSON
+      required: false
+      default: {}
+      selector:
+        object:

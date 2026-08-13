@@ -1,0 +1,74 @@
+{
+  "title": "WiserLink MPI",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion au WiserLink MPI",
+        "description": "Saisissez l’adresse locale et les identifiants du module.",
+        "data": {
+          "host": "Adresse IP ou nom d’hôte",
+          "port": "Port HTTP",
+          "username": "Nom d’utilisateur",
+          "password": "Mot de passe",
+          "scan_interval": "Intervalle de lecture (secondes)",
+          "failure_threshold": "Échecs consécutifs avant indisponibilité",
+          "enable_gas": "Module optionnel gaz installé",
+          "enable_water": "Module optionnel eau installé",
+          "load_name_0": "Nom du load 1",
+          "load_name_1": "Nom du load 2",
+          "load_name_2": "Nom du load 3",
+          "load_name_3": "Nom du load 4",
+          "load_name_4": "Nom du load 5",
+          "load_name_5": "Nom du load 6",
+          "load_name_6": "Nom du load 7",
+          "load_name_7": "Nom du load 8",
+          "load_name_8": "Nom du load 9",
+          "load_name_9": "Nom du compteur téléinformation",
+          "load_name_10": "Nom du compteur gaz",
+          "load_name_11": "Nom du compteur eau"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connexion impossible ou réponse invalide",
+      "invalid_auth": "Identifiants incorrects"
+    },
+    "abort": {
+      "already_configured": "Ce WiserLink MPI est déjà configuré"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurer le WiserLink MPI",
+        "description": "Modifiez la connexion et le nom de chaque voie détectée. Les champs load_name_N correspondent à l’ordre renvoyé par le MPI.",
+        "data": {
+          "host": "Adresse IP ou nom d’hôte",
+          "port": "Port HTTP",
+          "username": "Nom d’utilisateur",
+          "password": "Mot de passe",
+          "scan_interval": "Intervalle de lecture (secondes)",
+          "failure_threshold": "Échecs consécutifs avant indisponibilité",
+          "enable_gas": "Module optionnel gaz installé",
+          "enable_water": "Module optionnel eau installé",
+          "load_name_0": "Nom du load 1",
+          "load_name_1": "Nom du load 2",
+          "load_name_2": "Nom du load 3",
+          "load_name_3": "Nom du load 4",
+          "load_name_4": "Nom du load 5",
+          "load_name_5": "Nom du load 6",
+          "load_name_6": "Nom du load 7",
+          "load_name_7": "Nom du load 8",
+          "load_name_8": "Nom du load 9",
+          "load_name_9": "Nom du compteur téléinformation",
+          "load_name_10": "Nom du compteur gaz",
+          "load_name_11": "Nom du compteur eau"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connexion impossible ou réponse invalide",
+      "invalid_auth": "Identifiants incorrects"
+    }
+  }
+}
