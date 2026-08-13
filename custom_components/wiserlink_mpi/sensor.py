@@ -9,6 +9,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, Sen
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfVolume
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -80,6 +81,7 @@ async def async_setup_entry(
     """Create two entities for every meter returned by the MPI."""
     coordinator: WiserLinkCoordinator = entry.runtime_data
     meters = coordinator.data.get("UsageMeterList", [])
+    _migrate_fluid_entities(hass, entry)
     async_add_entities(
         WiserLinkSensor(coordinator, entry, index, metric)
         for index, meter in enumerate(meters)
@@ -87,6 +89,37 @@ async def async_setup_entry(
         for metric in _metrics_for_meter(index)
         if isinstance(meter, dict) and metric.field in meter
     )
+
+
+def _migrate_fluid_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Rename legacy fluid energy entities and remove obsolete power entities."""
+    registry = er.async_get(hass)
+    entry_prefix = entry.unique_id or entry.entry_id
+
+    for index in (10, 11):
+        power_unique_id = f"{entry_prefix}_{index}_power"
+        power_entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, power_unique_id
+        )
+        if power_entity_id is not None:
+            registry.async_remove(power_entity_id)
+
+        volume_unique_id = f"{entry_prefix}_{index}_energyconsumed"
+        volume_entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, volume_unique_id
+        )
+        if volume_entity_id is None or volume_entity_id.endswith("_volume"):
+            continue
+
+        entity_prefix = volume_entity_id.removesuffix("_energie")
+        if entity_prefix == volume_entity_id:
+            entity_prefix = volume_entity_id.rsplit("_", 1)[0]
+        desired_entity_id = f"{entity_prefix}_volume"
+
+        if registry.async_get(desired_entity_id) is None:
+            registry.async_update_entity(
+                volume_entity_id, new_entity_id=desired_entity_id
+            )
 
 
 class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):

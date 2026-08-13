@@ -50,6 +50,8 @@ Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe es
 
 Le gaz et l’eau nécessitent des modules optionnels. Leur absence n’entraîne aucune erreur et n’affecte pas les capteurs électriques ni l’état **MPI Online**. Les modules gaz et eau sont exposés comme des volumes cumulés en mètres cubes (`m³`), avec une icône propre à chaque fluide.
 
+Lors d’une mise à jour depuis une ancienne version, les entités `Gaz Énergie` et `Eau de ville Énergie` sont automatiquement renommées en `Gaz Volume` et `Eau de ville Volume`. Les anciennes entités de puissance gaz/eau sont retirées du registre.
+
 ## Écriture
 
 L’action `wiserlink_mpi.send_command` permet d’envoyer une requête `POST`, `PUT` ou `PATCH` à un endpoint local `/vesta/`.
