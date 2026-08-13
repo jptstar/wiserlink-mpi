@@ -23,6 +23,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - lecture locale de `/vesta/UsageMeter` sans MQTT ni Node-RED ;
 - capteurs de puissance et d’énergie par voie ;
 - adresse IP, port, identifiants et noms des voies personnalisables ;
+- noms génériques par défaut (`Voie 1`, `Voie 2`, etc.) ;
 - intervalle d’actualisation réglable de 2 à 300 secondes ;
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
@@ -43,7 +44,7 @@ Renseignez l’adresse IP du MPI, le port HTTP, le nom d’utilisateur, le mot d
 
 Les paramètres et les noms des voies peuvent ensuite être modifiés dans **Paramètres → Appareils et services → WiserLink MPI → Configurer**.
 
-Les identifiants initiaux du EER31600 sont généralement `admin` / `admin`. Il est recommandé de modifier ce mot de passe.
+Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe est prérempli avec `admin` et reste modifiable.
 
 ## Gaz et eau
 

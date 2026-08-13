@@ -11,18 +11,14 @@ CONF_LOAD_NAME_PREFIX = "load_name_"
 DEFAULT_SCAN_INTERVAL = 5
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_USERNAME = "admin"
+DEFAULT_PASSWORD = "admin"
 DEFAULT_PORT = 80
 
 USAGE_METER_PATH = "/vesta/UsageMeter"
 SERVICE_SEND_COMMAND = "send_command"
 
 DEFAULT_METER_NAMES = {
-    0: "Chargeurs voitures",
-    1: "Domotique",
-    2: "Cuisine",
-    3: "Buanderie",
-    5: "Climatisation",
-    9: "Téléinformation",
-    10: "Gaz",
-    11: "Eau de ville",
+    **{index: f"Voie {index + 1}" for index in range(10)},
+    10: "Module gaz",
+    11: "Module eau",
 }

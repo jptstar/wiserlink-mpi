@@ -87,15 +87,9 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
         super().__init__(coordinator)
         self._index = index
         self._metric = metric
-        meter = coordinator.data["UsageMeterList"][index]
         custom_name = entry.options.get(f"{CONF_LOAD_NAME_PREFIX}{index}")
-        meter_name = custom_name or next(
-            (
-                str(meter[key])
-                for key in ("Name", "Label", "name", "label")
-                if meter.get(key)
-            ),
-            DEFAULT_METER_NAMES.get(index, f"Compteur {index + 1}"),
+        meter_name = custom_name or DEFAULT_METER_NAMES.get(
+            index, f"Voie {index + 1}"
         )
         self._attr_name = f"{meter_name} {metric.label}"
         self._attr_unique_id = f"{entry.unique_id}_{index}_{metric.field.lower()}"

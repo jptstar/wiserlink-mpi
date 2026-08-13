@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WiserLinkAuthError, WiserLinkClient, WiserLinkError
@@ -19,6 +20,7 @@ from .const import (
     CONF_LOAD_NAME_PREFIX,
     DEFAULT_METER_NAMES,
     DEFAULT_FAILURE_THRESHOLD,
+    DEFAULT_PASSWORD,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_USERNAME,
@@ -68,13 +70,20 @@ class WiserLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Coerce(int), vol.Range(min=1, max=65535)
                 ),
                 vol.Required(CONF_USERNAME, default=DEFAULT_USERNAME): str,
-                vol.Required(CONF_PASSWORD): str,
+                vol.Required(CONF_PASSWORD, default=DEFAULT_PASSWORD): str,
                 vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
                     vol.Coerce(int), vol.Range(min=2, max=300)
                 ),
                 vol.Required(
                     CONF_FAILURE_THRESHOLD, default=DEFAULT_FAILURE_THRESHOLD
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1,
+                        max=20,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
                 vol.Required(CONF_ENABLE_GAS, default=False): bool,
                 vol.Required(CONF_ENABLE_WATER, default=False): bool,
             }
@@ -127,7 +136,14 @@ class WiserLinkOptionsFlow(OptionsFlow):
             vol.Required(
                 CONF_FAILURE_THRESHOLD,
                 default=current.get(CONF_FAILURE_THRESHOLD, DEFAULT_FAILURE_THRESHOLD),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=20,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
             vol.Required(CONF_ENABLE_GAS, default=current.get(CONF_ENABLE_GAS, False)): bool,
             vol.Required(
                 CONF_ENABLE_WATER, default=current.get(CONF_ENABLE_WATER, False)
@@ -141,15 +157,8 @@ class WiserLinkOptionsFlow(OptionsFlow):
             if index == 11 and not current.get(CONF_ENABLE_WATER, False):
                 continue
             key = f"{CONF_LOAD_NAME_PREFIX}{index}"
-            detected = next(
-                (
-                    str(meter[name_key])
-                    for name_key in ("Name", "Label", "name", "label")
-                    if meter.get(name_key)
-                ),
-                DEFAULT_METER_NAMES.get(index, f"Load {index + 1}"),
-            )
-            fields[vol.Required(key, default=current.get(key, detected))] = str
+            generic_name = DEFAULT_METER_NAMES.get(index, f"Voie {index + 1}")
+            fields[vol.Required(key, default=current.get(key, generic_name))] = str
 
         return self.async_show_form(
             step_id="init", data_schema=vol.Schema(fields), errors=errors
