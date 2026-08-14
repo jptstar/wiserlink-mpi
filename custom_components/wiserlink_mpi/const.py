@@ -16,6 +16,11 @@ DEFAULT_PORT = 80
 
 USAGE_METER_PATH = "/vesta/UsageMeter"
 SERVICE_SEND_COMMAND = "send_command"
+SERVICE_CONFIGURE_MPR = "configure_mpr"
+SERVICE_DELETE_MPR = "delete_mpr"
+
+SEM_IDENTIFICATION_PATH = "/vesta/SemIdentification"
+MPR_INSTANCES_PATH = "/vesta/MpeEndpoint/instances"
 
 DEFAULT_METER_NAMES = {
     **{index: f"Voie {index + 1}" for index in range(10)},

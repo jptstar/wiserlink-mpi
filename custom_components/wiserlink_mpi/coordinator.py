@@ -46,5 +46,33 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
                 )
                 return self.data
             raise UpdateFailed(str(err)) from err
+        try:
+            data["_sem_identification"] = (
+                await self.client.async_get_sem_identification()
+            )
+        except WiserLinkError as err:
+            _LOGGER.warning("Lecture des statuts EM5 impossible: %s", err)
+            if self.data is not None and "_sem_identification" in self.data:
+                data["_sem_identification"] = self.data["_sem_identification"]
+        try:
+            data["_mip_identification"] = (
+                await self.client.async_get_mip_identification()
+            )
+        except WiserLinkError as err:
+            _LOGGER.warning("Lecture de l’identification MIP impossible: %s", err)
+            if self.data is not None and "_mip_identification" in self.data:
+                data["_mip_identification"] = self.data["_mip_identification"]
+        try:
+            data["_mpr_instances"] = await self.client.async_get_mpr_instances()
+        except WiserLinkError as err:
+            _LOGGER.warning("Lecture des compteurs MPR impossible: %s", err)
+            if self.data is not None and "_mpr_instances" in self.data:
+                data["_mpr_instances"] = self.data["_mpr_instances"]
+        try:
+            data["_events"] = await self.client.async_get_events()
+        except WiserLinkError as err:
+            _LOGGER.warning("Lecture des événements impossible: %s", err)
+            if self.data is not None and "_events" in self.data:
+                data["_events"] = self.data["_events"]
         self.consecutive_failures = 0
         return data

@@ -29,6 +29,11 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - conservation des dernières valeurs pendant les tentatives ;
 - rejet des valeurs reçues lors d’une erreur ou d’une réponse corrompue ;
 - entité **MPI Online** classée dans les diagnostics ;
+- état EM5 et communications avec le MIP et le compteur électrique ;
+- numéros de série et versions logicielles MIP, EM5 et MPR ;
+- batterie et communication de chaque compteur MPR ;
+- journal des événements récents dans les diagnostics ;
+- configuration et suppression des compteurs impulsionnels MPR EER39300 ;
 - modules gaz et eau optionnels, désactivés par défaut.
 
 ## Installation avec HACS
@@ -54,6 +59,8 @@ Le gaz et l’eau nécessitent des modules optionnels. Leur absence n’entraîn
 Lors d’une mise à jour depuis une ancienne version, les entités `Gaz Énergie` et `Eau de ville Énergie` sont automatiquement renommées en `Gaz Volume` et `Eau de ville Volume`. Les anciennes entités de puissance gaz/eau sont retirées du registre.
 
 ## Écriture
+
+Les actions `wiserlink_mpi.configure_mpr` et `wiserlink_mpi.delete_mpr` permettent d’ajouter, modifier ou supprimer un compteur MPR depuis Home Assistant. Le formulaire comprend le type de compteur, l’usage RT2012, le poids et l’unité d’impulsion ainsi que l’adresse radio.
 
 L’action `wiserlink_mpi.send_command` permet d’envoyer une requête `POST`, `PUT` ou `PATCH` à un endpoint local `/vesta/`.
 

@@ -19,6 +19,8 @@ from .const import (
     CONF_FAILURE_THRESHOLD,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CONFIGURE_MPR,
+    SERVICE_DELETE_MPR,
     SERVICE_SEND_COMMAND,
 )
 from .coordinator import WiserLinkCoordinator
@@ -33,6 +35,41 @@ SERVICE_SCHEMA = vol.Schema(
         vol.Optional("payload", default={}): dict,
     }
 )
+
+CONFIGURE_MPR_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("meter_id"): vol.All(vol.Coerce(int), vol.Range(min=0, max=3)),
+        vol.Required("meter_type"): vol.In(
+            ["Cold Water Meter", "Hot Water Meter", "Gas Meter", "Calorimeter"]
+        ),
+        vol.Required("rt2012_usage"): vol.In(
+            ["No usage", "Heating", "Hot water", "Cooling", "Sockets", "Others"]
+        ),
+        vol.Required("pulse_weight"): vol.All(
+            vol.Coerce(float), vol.Range(min=0.001)
+        ),
+        vol.Required("pulse_weight_unit"): vol.In(
+            ["Litre", "m3", "dm3", "kWh", "Wh"]
+        ),
+        vol.Required("radio_address"): vol.Match(r"^[0-9]{15}$"),
+    }
+)
+
+DELETE_MPR_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Required("meter_id"): vol.All(vol.Coerce(int), vol.Range(min=0, max=3)),
+    }
+)
+
+
+def _get_target_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry:
+    """Resolve an explicitly selected WiserLink MPI configuration."""
+    target = hass.config_entries.async_get_entry(entry_id)
+    if target is None or target.domain != DOMAIN or target.runtime_data is None:
+        raise ServiceValidationError("Configuration WiserLink MPI introuvable")
+    return target
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) -> bool:
@@ -58,9 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
 
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_COMMAND):
         async def async_send_command(call: ServiceCall) -> dict[str, Any]:
-            target = hass.config_entries.async_get_entry(call.data["entry_id"])
-            if target is None or target.domain != DOMAIN or target.runtime_data is None:
-                raise ServiceValidationError("Configuration WiserLink MPI introuvable")
+            target = _get_target_entry(hass, call.data["entry_id"])
             try:
                 response = await target.runtime_data.client.async_send_command(
                     call.data["method"], call.data["path"], call.data["payload"]
@@ -75,6 +110,53 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
             SERVICE_SEND_COMMAND,
             async_send_command,
             schema=SERVICE_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+        async def async_configure_mpr(call: ServiceCall) -> dict[str, Any]:
+            target = _get_target_entry(hass, call.data["entry_id"])
+            try:
+                result = await target.runtime_data.client.async_configure_mpr(
+                    call.data["meter_id"],
+                    call.data["meter_type"],
+                    call.data["rt2012_usage"],
+                    call.data["pulse_weight"],
+                    call.data["pulse_weight_unit"],
+                    call.data["radio_address"],
+                )
+            except WiserLinkError as err:
+                raise HomeAssistantError(str(err)) from err
+            await target.runtime_data.async_request_refresh()
+            return {
+                "meter_id": result["Id"],
+                "meter_type": result["Type"],
+                "status": "configured",
+            }
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CONFIGURE_MPR,
+            async_configure_mpr,
+            schema=CONFIGURE_MPR_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+        async def async_delete_mpr(call: ServiceCall) -> dict[str, Any]:
+            target = _get_target_entry(hass, call.data["entry_id"])
+            try:
+                await target.runtime_data.client.async_delete_mpr(
+                    call.data["meter_id"]
+                )
+            except WiserLinkError as err:
+                raise HomeAssistantError(str(err)) from err
+            await target.runtime_data.async_request_refresh()
+            return {"meter_id": call.data["meter_id"], "status": "deleted"}
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_DELETE_MPR,
+            async_delete_mpr,
+            schema=DELETE_MPR_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
     return True
@@ -93,4 +175,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) -
         for item in hass.config_entries.async_entries(DOMAIN)
     ):
         hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
+        hass.services.async_remove(DOMAIN, SERVICE_CONFIGURE_MPR)
+        hass.services.async_remove(DOMAIN, SERVICE_DELETE_MPR)
     return unloaded

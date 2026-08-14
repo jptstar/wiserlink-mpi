@@ -32,3 +32,91 @@ send_command:
       default: {}
       selector:
         object:
+
+configure_mpr:
+  name: Configurer un compteur MPR
+  description: Ajoute ou modifie un compteur impulsionnel radio EER39300.
+  fields:
+    entry_id:
+      name: Configuration
+      required: true
+      selector:
+        config_entry:
+          integration: wiserlink_mpi
+    meter_id:
+      name: Numéro du compteur
+      description: Emplacement MPR de 0 à 3.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 3
+          mode: box
+    meter_type:
+      name: Type de compteur
+      required: true
+      selector:
+        select:
+          options:
+            - Cold Water Meter
+            - Hot Water Meter
+            - Gas Meter
+            - Calorimeter
+    rt2012_usage:
+      name: Usage RT2012
+      required: true
+      selector:
+        select:
+          options:
+            - No usage
+            - Heating
+            - Hot water
+            - Cooling
+            - Sockets
+            - Others
+    pulse_weight:
+      name: Poids d'impulsion
+      required: true
+      selector:
+        number:
+          min: 0.001
+          max: 100000
+          step: 0.001
+          mode: box
+    pulse_weight_unit:
+      name: Unité d'impulsion
+      required: true
+      selector:
+        select:
+          options:
+            - Litre
+            - m3
+            - dm3
+            - kWh
+            - Wh
+    radio_address:
+      name: Adresse radio
+      description: Adresse radio à 15 chiffres indiquée sur le module.
+      required: true
+      selector:
+        text:
+
+delete_mpr:
+  name: Supprimer un compteur
+  description: Supprime un compteur MPR configuré sur le WiserLink MPI.
+  fields:
+    entry_id:
+      name: Configuration
+      required: true
+      selector:
+        config_entry:
+          integration: wiserlink_mpi
+    meter_id:
+      name: Numéro du compteur
+      description: Emplacement MPR de 0 à 3 à supprimer.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 3
+          mode: box
