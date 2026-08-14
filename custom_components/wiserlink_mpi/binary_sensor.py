@@ -39,7 +39,10 @@ async def async_setup_entry(
             "ComStatWithTIC",
         ),
     ]
-    for meter in coordinator.data.get("_mpr_instances", []):
+    for meter in sorted(
+        coordinator.data.get("_mpr_instances", []),
+        key=lambda item: item.get("Id", 999),
+    ):
         meter_id = meter.get("Id")
         if meter_id is None:
             continue

@@ -32,7 +32,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - état EM5 et communications avec le MIP et le compteur électrique ;
 - numéros de série et versions logicielles MIP, EM5 et MPR ;
 - batterie et communication de chaque compteur MPR ;
-- journal des événements récents dans les diagnostics ;
+- dernier événement affiché directement, avec l’historique récent en attribut ;
 - configuration et suppression des compteurs impulsionnels MPR EER39300 ;
 - modules gaz et eau optionnels, désactivés par défaut.
 

@@ -95,16 +95,6 @@ async def async_setup_entry(
             WiserLinkDiagnosticSensor(
                 coordinator,
                 entry,
-                "em5_status",
-                "Statut EM5",
-                lambda data: {"Nominal": "Normal"}.get(
-                    data.get("_sem_identification", {}).get("Status"),
-                    data.get("_sem_identification", {}).get("Status"),
-                ),
-            ),
-            WiserLinkDiagnosticSensor(
-                coordinator,
-                entry,
                 "mip_serial",
                 "MIP Numéro de série",
                 lambda data: data.get("_mip_identification", {}).get(
@@ -127,6 +117,16 @@ async def async_setup_entry(
                 "MIP Version de la page web",
                 lambda data: data.get("_mip_identification", {}).get(
                     "Webpage_Version"
+                ),
+            ),
+            WiserLinkDiagnosticSensor(
+                coordinator,
+                entry,
+                "em5_status",
+                "EM5 Statut",
+                lambda data: {"Nominal": "Normal"}.get(
+                    data.get("_sem_identification", {}).get("Status"),
+                    data.get("_sem_identification", {}).get("Status"),
                 ),
             ),
             WiserLinkDiagnosticSensor(
@@ -170,14 +170,17 @@ async def async_setup_entry(
                 "MPR Version du logiciel",
                 lambda data: _mpr_extension_value(data, "SWVersionMain"),
             ),
-            WiserLinkEventsSensor(coordinator, entry),
         ]
     )
     async_add_entities(
         WiserLinkMprConfigurationSensor(coordinator, entry, meter["Id"])
-        for meter in coordinator.data.get("_mpr_instances", [])
+        for meter in sorted(
+            coordinator.data.get("_mpr_instances", []),
+            key=lambda item: item.get("Id", 999),
+        )
         if meter.get("Id") is not None
     )
+    async_add_entities([WiserLinkEventsSensor(coordinator, entry)])
 
 
 def _mpr_extension_value(data: dict, field: str) -> str | None:
@@ -218,7 +221,7 @@ class WiserLinkDiagnosticSensor(
 class WiserLinkEventsSensor(
     CoordinatorEntity[WiserLinkCoordinator], SensorEntity
 ):
-    """Expose the event count and five most recent events."""
+    """Expose the latest event message and five most recent events."""
 
     _attr_has_entity_name = True
     _attr_name = "Événements"
@@ -236,9 +239,10 @@ class WiserLinkEventsSensor(
         )
 
     @property
-    def native_value(self) -> int | None:
-        """Return the total number of events stored by the MPI."""
-        return self.coordinator.data.get("_events", {}).get("TotalNB")
+    def native_value(self) -> str | None:
+        """Return the latest event description as the visible state."""
+        events = self.coordinator.data.get("_events", {}).get("EventList", [])
+        return _event_description(events[-1])[:255] if events else None
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -246,9 +250,12 @@ class WiserLinkEventsSensor(
         events = self.coordinator.data.get("_events", {}).get("EventList", [])
         recent = list(reversed(events[-5:]))
         return {
+            "nombre_total": self.coordinator.data.get("_events", {}).get(
+                "TotalNB"
+            ),
             "evenements": [
                 {
-                    "Id": index,
+                    "Id": event.get("Id", index),
                     "Date&Heure": _format_event_time(event.get("Timestamp")),
                     "Description": _event_description(event),
                 }
