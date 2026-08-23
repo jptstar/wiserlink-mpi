@@ -11,10 +11,16 @@ from .const import (
     CONF_ENABLE_WATER,
     CONF_LOAD_NAME_PREFIX,
     CONF_METER_ENABLED_PREFIX,
+    CONF_METER_UNIT_PREFIX,
+    METER_UNIT_AUTO,
+    METER_UNIT_KWH,
+    METER_UNIT_M3,
+    METER_UNIT_WH,
 )
 
 _LOAD_RE = re.compile(r"^load\s*([1-5])$", re.IGNORECASE)
 _USAGE_TYPES = {"heating", "cooling", "hot water", "sockets"}
+_VALID_UNIT_OVERRIDES = {METER_UNIT_AUTO, METER_UNIT_KWH, METER_UNIT_WH, METER_UNIT_M3}
 
 
 def _text(value: Any) -> str:
@@ -140,6 +146,7 @@ def meter_default_name(meter: Mapping[str, Any], index: int) -> str:
         "electricity meter": "Compteur électrique",
         "cold water meter": "Eau froide",
         "hot water meter": "Eau chaude",
+        "gas meter": "Gaz",
         "calorimeter": "Calorimètre",
     }
     return names.get(kind, meter_type(meter) or f"Voie {index + 1}")
@@ -159,8 +166,30 @@ def _legacy_default_name(index: int) -> str | None:
 def meter_name(
     settings: Mapping[str, Any], meter: Mapping[str, Any], index: int
 ) -> str:
-    """Return a real user override or the detected/default meter name."""
+    """Return a real user override or the detected/API meter name."""
     custom = _text(settings.get(f"{CONF_LOAD_NAME_PREFIX}{index}"))
     if custom and custom != _legacy_default_name(index):
         return custom
     return meter_default_name(meter, index)
+
+
+def meter_unit_override(settings: Mapping[str, Any], index: int) -> str:
+    """Return a validated per-meter unit override."""
+    value = _text(settings.get(f"{CONF_METER_UNIT_PREFIX}{index}")).lower()
+    return value if value in _VALID_UNIT_OVERRIDES else METER_UNIT_AUTO
+
+
+def meter_effective_unit(
+    settings: Mapping[str, Any], index: int, meter: Mapping[str, Any]
+) -> str:
+    """Return the configured unit or the unit reported by the MPI in Auto mode."""
+    override = meter_unit_override(settings, index)
+    if override != METER_UNIT_AUTO:
+        return override
+
+    api_unit = normalized_energy_unit(meter)
+    if api_unit in {"m3", "m^3"}:
+        return METER_UNIT_M3
+    if api_unit == "wh":
+        return METER_UNIT_WH
+    return METER_UNIT_KWH

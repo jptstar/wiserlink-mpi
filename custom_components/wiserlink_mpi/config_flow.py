@@ -16,6 +16,7 @@ from .const import (
     CONF_FAILURE_THRESHOLD,
     CONF_LOAD_NAME_PREFIX,
     CONF_METER_ENABLED_PREFIX,
+    CONF_METER_UNIT_PREFIX,
     CONF_SCAN_INTERVAL,
     DEFAULT_FAILURE_THRESHOLD,
     DEFAULT_PASSWORD,
@@ -23,8 +24,25 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_USERNAME,
     DOMAIN,
+    METER_UNIT_AUTO,
+    METER_UNIT_KWH,
+    METER_UNIT_M3,
+    METER_UNIT_WH,
 )
-from .meter import meter_default_name, meter_enabled
+from .meter import meter_enabled, meter_name, meter_unit_override
+
+
+_UNIT_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[
+            {"value": METER_UNIT_AUTO, "label": "Auto (unité du Wiser)"},
+            {"value": METER_UNIT_KWH, "label": "kWh"},
+            {"value": METER_UNIT_WH, "label": "Wh"},
+            {"value": METER_UNIT_M3, "label": "m³"},
+        ],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+    )
+)
 
 
 class WiserLinkConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -98,7 +116,7 @@ class WiserLinkOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate and save connection, enabled meters and friendly names."""
+        """Validate and save connection, enabled meters, names and units."""
         current = {**self._entry.data, **self._entry.options}
         coordinator = self._entry.runtime_data
         meters = (
@@ -156,6 +174,7 @@ class WiserLinkOptionsFlow(OptionsFlow):
         for index, meter in enumerate(meters):
             enabled_key = f"{CONF_METER_ENABLED_PREFIX}{index}"
             name_key = f"{CONF_LOAD_NAME_PREFIX}{index}"
+            unit_key = f"{CONF_METER_UNIT_PREFIX}{index}"
             fields[
                 vol.Required(
                     enabled_key,
@@ -165,9 +184,15 @@ class WiserLinkOptionsFlow(OptionsFlow):
             fields[
                 vol.Required(
                     name_key,
-                    default=current.get(name_key, meter_default_name(meter, index)),
+                    default=meter_name(current, meter, index),
                 )
             ] = str
+            fields[
+                vol.Required(
+                    unit_key,
+                    default=meter_unit_override(current, index),
+                )
+            ] = _UNIT_SELECTOR
 
         return self.async_show_form(
             step_id="init", data_schema=vol.Schema(fields), errors=errors

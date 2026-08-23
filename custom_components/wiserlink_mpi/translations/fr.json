@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Connexion au WiserLink MPI",
-        "description": "Saisissez l’adresse locale et les identifiants du module. Les voies détectées pourront ensuite être activées, désactivées et renommées dans Configurer.",
+        "description": "Saisissez l’adresse locale et les identifiants du module. Les voies détectées pourront ensuite être activées, désactivées, renommées et configurées dans Configurer.",
         "data": {
           "host": "Adresse IP ou nom d’hôte",
           "port": "Port HTTP",
@@ -27,7 +27,7 @@
     "step": {
       "init": {
         "title": "Configurer le WiserLink MPI",
-        "description": "Activez ou désactivez chaque entrée détectée. Les noms sont préremplis depuis l’API du MPI. CT1 à CT5, Autres, le compteur électrique/TIC et les compteurs en m³ sont activés par défaut. Les usages RT2012 agrégés sont désactivés par défaut lorsque les cinq CT individuels sont disponibles.",
+        "description": "Activez ou désactivez chaque entrée détectée. Les noms proviennent du Wiser/MPI sauf si vous les personnalisez ici. L’unité peut rester en Auto (valeur du Wiser) ou être forcée en kWh, Wh ou m³.",
         "data": {
           "host": "Adresse IP ou nom d’hôte",
           "port": "Port HTTP",
@@ -37,28 +37,40 @@
           "failure_threshold": "Échecs consécutifs avant indisponibilité",
           "meter_enabled_0": "Activer CT1",
           "load_name_0": "Nom CT1",
+          "meter_unit_0": "Unité CT1",
           "meter_enabled_1": "Activer CT2",
           "load_name_1": "Nom CT2",
+          "meter_unit_1": "Unité CT2",
           "meter_enabled_2": "Activer CT3",
           "load_name_2": "Nom CT3",
+          "meter_unit_2": "Unité CT3",
           "meter_enabled_3": "Activer CT4",
           "load_name_3": "Nom CT4",
+          "meter_unit_3": "Unité CT4",
           "meter_enabled_4": "Activer CT5",
           "load_name_4": "Nom CT5",
+          "meter_unit_4": "Unité CT5",
           "meter_enabled_5": "Activer entrée API 6",
           "load_name_5": "Nom entrée API 6",
+          "meter_unit_5": "Unité entrée API 6",
           "meter_enabled_6": "Activer entrée API 7",
           "load_name_6": "Nom entrée API 7",
+          "meter_unit_6": "Unité entrée API 7",
           "meter_enabled_7": "Activer entrée API 8",
           "load_name_7": "Nom entrée API 8",
+          "meter_unit_7": "Unité entrée API 8",
           "meter_enabled_8": "Activer entrée API 9",
           "load_name_8": "Nom entrée API 9",
+          "meter_unit_8": "Unité entrée API 9",
           "meter_enabled_9": "Activer Autres",
           "load_name_9": "Nom Autres",
+          "meter_unit_9": "Unité Autres",
           "meter_enabled_10": "Activer compteur électrique / TIC",
           "load_name_10": "Nom compteur électrique / TIC",
+          "meter_unit_10": "Unité compteur électrique / TIC",
           "meter_enabled_11": "Activer entrée API 12",
-          "load_name_11": "Nom entrée API 12"
+          "load_name_11": "Nom entrée API 12",
+          "meter_unit_11": "Unité entrée API 12"
         }
       }
     },
