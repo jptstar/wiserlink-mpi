@@ -5,9 +5,13 @@ PLATFORMS = ["binary_sensor", "sensor"]
 
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_FAILURE_THRESHOLD = "failure_threshold"
+CONF_LOAD_NAME_PREFIX = "load_name_"
+CONF_METER_ENABLED_PREFIX = "meter_enabled_"
+
+# Legacy options kept for backward compatibility with releases <= 0.7.1.
 CONF_ENABLE_GAS = "enable_gas"
 CONF_ENABLE_WATER = "enable_water"
-CONF_LOAD_NAME_PREFIX = "load_name_"
+
 DEFAULT_SCAN_INTERVAL = 5
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_USERNAME = "admin"
@@ -21,9 +25,3 @@ SERVICE_DELETE_MPR = "delete_mpr"
 
 SEM_IDENTIFICATION_PATH = "/vesta/SemIdentification"
 MPR_INSTANCES_PATH = "/vesta/MpeEndpoint/instances"
-
-DEFAULT_METER_NAMES = {
-    **{index: f"Voie {index + 1}" for index in range(10)},
-    10: "Module gaz",
-    11: "Module eau",
-}
