@@ -18,19 +18,28 @@ validation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
 
 
+def _meter(
+    energy: float,
+    power: float = 1000,
+    *,
+    meter_type: str = "Load1",
+    energy_unit: str = "kWh",
+    power_unit: str = "W",
+) -> dict:
+    return {
+        "Type": meter_type,
+        "Power": power,
+        "PowerValidity": True,
+        "Unit_Power": power_unit,
+        "EnergyConsumed": energy,
+        "EnergyValidity": True,
+        "Unit_Energy": energy_unit,
+    }
+
+
 class UsageMeterValidationTests(unittest.TestCase):
     def test_normal_kwh_values_are_accepted(self) -> None:
-        validation.validate_usage_meters(
-            [
-                {
-                    "Type": "Load1",
-                    "Power": 725,
-                    "Unit_Power": "W",
-                    "EnergyConsumed": 1842.37,
-                    "Unit_Energy": "kWh",
-                }
-            ]
-        )
+        validation.validate_usage_meters([_meter(1842.37, 725)])
 
     def test_observed_32bit_kwh_value_is_rejected(self) -> None:
         for value in (2147483.75, 2147483.89, 2147484.24, 2147489.03):
@@ -136,6 +145,91 @@ class UsageMeterValidationTests(unittest.TestCase):
                 }
             ]
         )
+
+
+class UsageMeterSnapshotTests(unittest.TestCase):
+    def test_normal_increment_is_coherent(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.000, 1200)],
+            [_meter(100.010, 1300)],
+            30,
+        )
+        self.assertEqual(anomalies, ())
+
+    def test_counter_decrease_requires_confirmation(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.0)],
+            [_meter(0.0)],
+            30,
+        )
+        self.assertIn("energy_decrease:1", anomalies)
+
+    def test_transient_zero_then_real_value_is_detected_as_jump(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(0.0, 1000)],
+            [_meter(1200.0, 1000)],
+            1,
+        )
+        self.assertIn("energy_jump:1", anomalies)
+
+    def test_large_unexplained_energy_jump_requires_confirmation(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.0, 500)],
+            [_meter(120.0, 500)],
+            30,
+        )
+        self.assertIn("energy_jump:1", anomalies)
+
+    def test_high_power_explains_large_increment(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.0, 100000)],
+            [_meter(102.0, 100000)],
+            60,
+        )
+        self.assertEqual(anomalies, ())
+
+    def test_confirmed_new_baseline_is_coherent_between_confirmations(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(1200.000, 1000)],
+            [_meter(1200.001, 1000)],
+            1,
+        )
+        self.assertEqual(anomalies, ())
+
+    def test_meter_count_change_requires_confirmation(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.0)],
+            [_meter(100.0), _meter(20.0, meter_type="Load2")],
+            30,
+        )
+        self.assertEqual(anomalies, ("structure:count",))
+
+    def test_meter_type_change_requires_confirmation(self) -> None:
+        anomalies = validation.snapshot_anomalies(
+            [_meter(100.0, meter_type="Load1")],
+            [_meter(100.0, meter_type="Load2")],
+            30,
+        )
+        self.assertIn("structure:1", anomalies)
+
+    def test_volume_increment_is_not_checked_against_electrical_power(self) -> None:
+        old = _meter(10.0, energy_unit="m3")
+        new = _meter(20.0, energy_unit="m3")
+        anomalies = validation.snapshot_anomalies([old], [new], 1)
+        self.assertEqual(anomalies, ())
+
+    def test_volume_counter_decrease_still_requires_confirmation(self) -> None:
+        old = _meter(10.0, energy_unit="m3")
+        new = _meter(0.0, energy_unit="m3")
+        anomalies = validation.snapshot_anomalies([old], [new], 30)
+        self.assertIn("energy_decrease:1", anomalies)
+
+    def test_invalid_energy_flag_skips_continuity_check(self) -> None:
+        old = _meter(100.0)
+        new = _meter(0.0)
+        new["EnergyValidity"] = False
+        anomalies = validation.snapshot_anomalies([old], [new], 30)
+        self.assertEqual(anomalies, ())
 
 
 if __name__ == "__main__":
