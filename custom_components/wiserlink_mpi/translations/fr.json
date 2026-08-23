@@ -4,28 +4,14 @@
     "step": {
       "user": {
         "title": "Connexion au WiserLink MPI",
-        "description": "Saisissez l’adresse locale et les identifiants du module.",
+        "description": "Saisissez l’adresse locale et les identifiants du module. Les voies détectées pourront ensuite être activées, désactivées et renommées dans Configurer.",
         "data": {
           "host": "Adresse IP ou nom d’hôte",
           "port": "Port HTTP",
           "username": "Nom d’utilisateur",
           "password": "Mot de passe",
           "scan_interval": "Intervalle de lecture (secondes)",
-          "failure_threshold": "Échecs consécutifs avant indisponibilité",
-          "enable_gas": "Module optionnel gaz installé",
-          "enable_water": "Module optionnel eau installé",
-          "load_name_0": "Nom du load 1",
-          "load_name_1": "Nom du load 2",
-          "load_name_2": "Nom du load 3",
-          "load_name_3": "Nom du load 4",
-          "load_name_4": "Nom du load 5",
-          "load_name_5": "Nom du load 6",
-          "load_name_6": "Nom du load 7",
-          "load_name_7": "Nom du load 8",
-          "load_name_8": "Nom du load 9",
-          "load_name_9": "Nom du compteur téléinformation",
-          "load_name_10": "Nom du compteur gaz",
-          "load_name_11": "Nom du compteur eau"
+          "failure_threshold": "Échecs consécutifs avant indisponibilité"
         }
       }
     },
@@ -41,7 +27,7 @@
     "step": {
       "init": {
         "title": "Configurer le WiserLink MPI",
-        "description": "Modifiez la connexion et le nom de chaque voie détectée. Les champs load_name_N correspondent à l’ordre renvoyé par le MPI.",
+        "description": "Activez ou désactivez chaque entrée détectée. Les noms sont préremplis depuis l’API du MPI. CT1 à CT5, Autres, le compteur électrique/TIC et les compteurs en m³ sont activés par défaut. Les usages RT2012 agrégés sont désactivés par défaut lorsque les cinq CT individuels sont disponibles.",
         "data": {
           "host": "Adresse IP ou nom d’hôte",
           "port": "Port HTTP",
@@ -49,20 +35,30 @@
           "password": "Mot de passe",
           "scan_interval": "Intervalle de lecture (secondes)",
           "failure_threshold": "Échecs consécutifs avant indisponibilité",
-          "enable_gas": "Module optionnel gaz installé",
-          "enable_water": "Module optionnel eau installé",
-          "load_name_0": "Nom du load 1",
-          "load_name_1": "Nom du load 2",
-          "load_name_2": "Nom du load 3",
-          "load_name_3": "Nom du load 4",
-          "load_name_4": "Nom du load 5",
-          "load_name_5": "Nom du load 6",
-          "load_name_6": "Nom du load 7",
-          "load_name_7": "Nom du load 8",
-          "load_name_8": "Nom du load 9",
-          "load_name_9": "Nom du compteur téléinformation",
-          "load_name_10": "Nom du compteur gaz",
-          "load_name_11": "Nom du compteur eau"
+          "meter_enabled_0": "Activer CT1",
+          "load_name_0": "Nom CT1",
+          "meter_enabled_1": "Activer CT2",
+          "load_name_1": "Nom CT2",
+          "meter_enabled_2": "Activer CT3",
+          "load_name_2": "Nom CT3",
+          "meter_enabled_3": "Activer CT4",
+          "load_name_3": "Nom CT4",
+          "meter_enabled_4": "Activer CT5",
+          "load_name_4": "Nom CT5",
+          "meter_enabled_5": "Activer entrée API 6",
+          "load_name_5": "Nom entrée API 6",
+          "meter_enabled_6": "Activer entrée API 7",
+          "load_name_6": "Nom entrée API 7",
+          "meter_enabled_7": "Activer entrée API 8",
+          "load_name_7": "Nom entrée API 8",
+          "meter_enabled_8": "Activer entrée API 9",
+          "load_name_8": "Nom entrée API 9",
+          "meter_enabled_9": "Activer Autres",
+          "load_name_9": "Nom Autres",
+          "meter_enabled_10": "Activer compteur électrique / TIC",
+          "load_name_10": "Nom compteur électrique / TIC",
+          "meter_enabled_11": "Activer entrée API 12",
+          "load_name_11": "Nom entrée API 12"
         }
       }
     },
