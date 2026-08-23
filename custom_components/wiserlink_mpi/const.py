@@ -7,6 +7,12 @@ CONF_SCAN_INTERVAL = "scan_interval"
 CONF_FAILURE_THRESHOLD = "failure_threshold"
 CONF_LOAD_NAME_PREFIX = "load_name_"
 CONF_METER_ENABLED_PREFIX = "meter_enabled_"
+CONF_METER_UNIT_PREFIX = "meter_unit_"
+
+METER_UNIT_AUTO = "auto"
+METER_UNIT_KWH = "kwh"
+METER_UNIT_WH = "wh"
+METER_UNIT_M3 = "m3"
 
 # Legacy options kept for backward compatibility with releases <= 0.7.1.
 CONF_ENABLE_GAS = "enable_gas"
