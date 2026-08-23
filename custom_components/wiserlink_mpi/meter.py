@@ -78,8 +78,9 @@ def is_electricity_meter(meter: Mapping[str, Any]) -> bool:
 
 
 def has_individual_cts(meters: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether the snapshot contains separate Load1..Load5 entries."""
-    return any(load_number(meter) is not None for meter in meters)
+    """Return whether all five physical CT entries are present."""
+    detected = {number for meter in meters if (number := load_number(meter)) is not None}
+    return detected == {1, 2, 3, 4, 5}
 
 
 def meter_default_enabled(
@@ -106,10 +107,12 @@ def meter_enabled(
     if key in settings:
         return bool(settings[key])
 
-    if is_gas_meter(meter) and CONF_ENABLE_GAS in settings:
-        return bool(settings[CONF_ENABLE_GAS])
-    if is_water_meter(meter) and CONF_ENABLE_WATER in settings:
-        return bool(settings[CONF_ENABLE_WATER])
+    # Old versions exposed global gas/water booleans. Keep an explicit old True,
+    # but never let the previous default False hide a newly detected real meter.
+    if is_gas_meter(meter) and settings.get(CONF_ENABLE_GAS) is True:
+        return True
+    if is_water_meter(meter) and settings.get(CONF_ENABLE_WATER) is True:
+        return True
 
     return meter_default_enabled(meter, meters)
 
@@ -142,9 +145,22 @@ def meter_default_name(meter: Mapping[str, Any], index: int) -> str:
     return names.get(kind, meter_type(meter) or f"Voie {index + 1}")
 
 
+def _legacy_default_name(index: int) -> str | None:
+    """Return the automatic name stored by releases <= 0.7.1."""
+    if 0 <= index <= 9:
+        return f"Voie {index + 1}"
+    if index == 10:
+        return "Module gaz"
+    if index == 11:
+        return "Module eau"
+    return None
+
+
 def meter_name(
     settings: Mapping[str, Any], meter: Mapping[str, Any], index: int
 ) -> str:
-    """Return a user override or the detected/default meter name."""
+    """Return a real user override or the detected/default meter name."""
     custom = _text(settings.get(f"{CONF_LOAD_NAME_PREFIX}{index}"))
-    return custom or meter_default_name(meter, index)
+    if custom and custom != _legacy_default_name(index):
+        return custom
+    return meter_default_name(meter, index)
