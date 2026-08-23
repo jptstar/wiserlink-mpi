@@ -1,4 +1,4 @@
-"""Energy and power sensors exposed by a WiserLink MPI."""
+"""Energy, power and volume sensors exposed by a WiserLink MPI."""
 
 from __future__ import annotations
 
@@ -15,63 +15,97 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import (
-    CONF_ENABLE_GAS,
-    CONF_ENABLE_WATER,
-    CONF_LOAD_NAME_PREFIX,
-    DEFAULT_METER_NAMES,
-    DOMAIN,
-)
+from .const import DOMAIN
 from .coordinator import WiserLinkCoordinator
+from .meter import (
+    is_gas_meter,
+    is_volume_meter,
+    is_water_meter,
+    meter_enabled,
+    meter_name,
+    normalized_energy_unit,
+    normalized_power_unit,
+)
 
 
 @dataclass(frozen=True)
 class Metric:
+    """Description of one numeric field exposed by a UsageMeter entry."""
+
     field: str
     label: str
     unit: str
     device_class: SensorDeviceClass
     state_class: SensorStateClass
+    validity_field: str
 
 
-METRICS = (
-    Metric("Power", "Puissance", UnitOfPower.WATT, SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
-    Metric("EnergyConsumed", "Énergie", UnitOfEnergy.KILO_WATT_HOUR, SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING),
+POWER_METRIC = Metric(
+    "Power",
+    "Puissance",
+    UnitOfPower.WATT,
+    SensorDeviceClass.POWER,
+    SensorStateClass.MEASUREMENT,
+    "PowerValidity",
 )
 
-FLUID_METRICS = (
-    Metric(
-        "EnergyConsumed",
-        "Volume",
-        UnitOfVolume.CUBIC_METERS,
-        SensorDeviceClass.VOLUME,
-        SensorStateClass.TOTAL_INCREASING,
-    ),
+ENERGY_METRIC = Metric(
+    "EnergyConsumed",
+    "Énergie",
+    UnitOfEnergy.KILO_WATT_HOUR,
+    SensorDeviceClass.ENERGY,
+    SensorStateClass.TOTAL_INCREASING,
+    "EnergyValidity",
+)
+
+VOLUME_METRIC = Metric(
+    "EnergyConsumed",
+    "Volume",
+    UnitOfVolume.CUBIC_METERS,
+    SensorDeviceClass.VOLUME,
+    SensorStateClass.TOTAL_INCREASING,
+    "EnergyValidity",
 )
 
 
-def _metrics_for_meter(index: int) -> tuple[Metric, ...]:
-    """Return metrics matching the physical type of a meter."""
-    if index in (10, 11):
-        return FLUID_METRICS
-    return METRICS
+def _metrics_for_meter(meter: dict) -> tuple[Metric, ...]:
+    """Return metrics from the API units instead of from a fixed list index."""
+    metrics: list[Metric] = []
 
+    if "Power" in meter and normalized_power_unit(meter) == "w":
+        metrics.append(POWER_METRIC)
 
-def _optional_meter_enabled(entry: ConfigEntry, index: int) -> bool:
-    """Return whether an optional fluid module should expose entities.
+    if "EnergyConsumed" in meter:
+        if is_volume_meter(meter):
+            metrics.append(VOLUME_METRIC)
+        else:
+            unit = normalized_energy_unit(meter)
+            if unit in {"", "kwh"}:
+                metrics.append(ENERGY_METRIC)
+            elif unit == "wh":
+                metrics.append(
+                    Metric(
+                        "EnergyConsumed",
+                        "Énergie",
+                        UnitOfEnergy.WATT_HOUR,
+                        SensorDeviceClass.ENERGY,
+                        SensorStateClass.TOTAL_INCREASING,
+                        "EnergyValidity",
+                    )
+                )
+            else:
+                metrics.append(
+                    Metric(
+                        "EnergyConsumed",
+                        "Énergie",
+                        meter.get("Unit_Energy") or UnitOfEnergy.KILO_WATT_HOUR,
+                        SensorDeviceClass.ENERGY,
+                        SensorStateClass.TOTAL_INCREASING,
+                        "EnergyValidity",
+                    )
+                )
 
-    Missing gas/water modules are a normal installation variant. They never
-    affect coordinator availability or the MPI Online entity.
-    """
-    if index == 10:
-        return entry.options.get(
-            CONF_ENABLE_GAS, entry.data.get(CONF_ENABLE_GAS, False)
-        )
-    if index == 11:
-        return entry.options.get(
-            CONF_ENABLE_WATER, entry.data.get(CONF_ENABLE_WATER, False)
-        )
-    return True
+    return tuple(metrics)
 
 
 async def async_setup_entry(
@@ -79,17 +113,24 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create two entities for every meter returned by the MPI."""
+    """Create entities for the enabled meters returned by the MPI."""
     coordinator: WiserLinkCoordinator = entry.runtime_data
-    meters = coordinator.data.get("UsageMeterList", [])
-    _migrate_fluid_entities(hass, entry)
+    meters = [
+        meter
+        for meter in coordinator.data.get("UsageMeterList", [])
+        if isinstance(meter, dict)
+    ]
+    settings = {**entry.data, **entry.options}
+
+    _remove_obsolete_fluid_power_entities(hass, entry, meters)
+
     async_add_entities(
-        WiserLinkSensor(coordinator, entry, index, metric)
+        WiserLinkSensor(coordinator, entry, index, meter, metric)
         for index, meter in enumerate(meters)
-        if _optional_meter_enabled(entry, index)
-        for metric in _metrics_for_meter(index)
-        if isinstance(meter, dict) and metric.field in meter
+        if meter_enabled(settings, index, meter, meters)
+        for metric in _metrics_for_meter(meter)
     )
+
     async_add_entities(
         [
             WiserLinkDiagnosticSensor(
@@ -226,7 +267,7 @@ class WiserLinkEventsSensor(
     _attr_has_entity_name = True
     _attr_name = "Événements"
     _attr_icon = "mdi:format-list-bulleted"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_category = EntityCategory.DIAGNIC
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator)
@@ -260,7 +301,7 @@ class WiserLinkEventsSensor(
                     "Description": _event_description(event),
                 }
                 for index, event in enumerate(recent, 1)
-            ]
+            ],
         }
 
 
@@ -351,35 +392,22 @@ def _event_description(event: dict) -> str:
     return f"Événement source {source}, code {code}, état {state}"
 
 
-def _migrate_fluid_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Rename legacy fluid energy entities and remove obsolete power entities."""
+def _remove_obsolete_fluid_power_entities(
+    hass: HomeAssistant, entry: ConfigEntry, meters: list[dict]
+) -> None:
+    """Remove legacy power entities for meters that are actually volumes."""
     registry = er.async_get(hass)
     entry_prefix = entry.unique_id or entry.entry_id
 
-    for index in (10, 11):
+    for index, meter in enumerate(meters):
+        if not is_volume_meter(meter):
+            continue
         power_unique_id = f"{entry_prefix}_{index}_power"
         power_entity_id = registry.async_get_entity_id(
             "sensor", DOMAIN, power_unique_id
         )
         if power_entity_id is not None:
             registry.async_remove(power_entity_id)
-
-        volume_unique_id = f"{entry_prefix}_{index}_energyconsumed"
-        volume_entity_id = registry.async_get_entity_id(
-            "sensor", DOMAIN, volume_unique_id
-        )
-        if volume_entity_id is None or volume_entity_id.endswith("_volume"):
-            continue
-
-        entity_prefix = volume_entity_id.removesuffix("_energie")
-        if entity_prefix == volume_entity_id:
-            entity_prefix = volume_entity_id.rsplit("_", 1)[0]
-        desired_entity_id = f"{entity_prefix}_volume"
-
-        if registry.async_get(desired_entity_id) is None:
-            registry.async_update_entity(
-                volume_entity_id, new_entity_id=desired_entity_id
-            )
 
 
 class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
@@ -392,26 +420,29 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
         coordinator: WiserLinkCoordinator,
         entry: ConfigEntry,
         index: int,
+        meter: dict,
         metric: Metric,
     ) -> None:
         super().__init__(coordinator)
         self._index = index
         self._metric = metric
-        custom_name = entry.options.get(f"{CONF_LOAD_NAME_PREFIX}{index}")
-        meter_name = custom_name or DEFAULT_METER_NAMES.get(
-            index, f"Voie {index + 1}"
-        )
-        self._attr_name = f"{meter_name} {metric.label}"
-        self._attr_unique_id = f"{entry.unique_id}_{index}_{metric.field.lower()}"
+        settings = {**entry.data, **entry.options}
+        detected_name = meter_name(settings, meter, index)
+        entry_prefix = entry.unique_id or entry.entry_id
+
+        self._attr_name = f"{detected_name} {metric.label}"
+        self._attr_unique_id = f"{entry_prefix}_{index}_{metric.field.lower()}"
         self._attr_native_unit_of_measurement = metric.unit
         self._attr_device_class = metric.device_class
         self._attr_state_class = metric.state_class
-        if index == 10:
+
+        if is_gas_meter(meter):
             self._attr_icon = "mdi:meter-gas"
-        elif index == 11:
+        elif is_water_meter(meter):
             self._attr_icon = "mdi:water"
+
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.unique_id or entry.entry_id)},
+            identifiers={(DOMAIN, entry_prefix)},
             name="WiserLink MPI",
             manufacturer="Schneider Electric",
             model="WiserLink MPI",
@@ -421,11 +452,46 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
             ),
         )
 
+    def _meter(self) -> dict | None:
+        """Return the current API entry at the stable list index."""
+        meters = self.coordinator.data.get("UsageMeterList", [])
+        if self._index >= len(meters) or not isinstance(meters[self._index], dict):
+            return None
+        return meters[self._index]
+
+    @property
+    def available(self) -> bool:
+        """Respect coordinator state and the validity flag reported by the MPI."""
+        if not super().available:
+            return False
+        meter = self._meter()
+        if meter is None:
+            return False
+        validity = meter.get(self._metric.validity_field)
+        if validity in (None, ""):
+            return True
+        return str(validity).strip().lower() not in {"0", "false"}
+
     @property
     def native_value(self) -> Decimal | None:
         """Return a numeric value without filtering legitimate zeroes."""
-        try:
-            value = self.coordinator.data["UsageMeterList"][self._index].get(self._metric.field)
-            return Decimal(str(value)) if value is not None else None
-        except (IndexError, KeyError, InvalidOperation, TypeError):
+        meter = self._meter()
+        if meter is None:
             return None
+        value = meter.get(self._metric.field)
+        try:
+            return Decimal(str(value)) if value is not None else None
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose the API identity so physical mapping can be verified easily."""
+        meter = self._meter() or {}
+        return {
+            "api_index": self._index,
+            "api_type": meter.get("Type"),
+            "api_name": meter.get("Name"),
+            "api_power_unit": meter.get("Unit_Power"),
+            "api_energy_unit": meter.get("Unit_Energy"),
+        }
