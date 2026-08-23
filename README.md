@@ -21,9 +21,14 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 ## Fonctions
 
 - lecture locale de `/vesta/UsageMeter` ;
-- capteurs de puissance et d’énergie par voie ;
-- adresse IP, port, identifiants et noms des voies personnalisables ;
-- noms génériques par défaut (`Voie 1`, `Voie 2`, etc.) ;
+- détection des compteurs à partir de `Type`, `Name`, `Unit_Power` et `Unit_Energy` ;
+- CT1 à CT5 reconnus à partir de `Load1` à `Load5` ;
+- détection séparée de `Others`, du compteur électrique/TIC et des compteurs de volume ;
+- gaz/eau reconnus comme volumes en `m³` sans supposer un index fixe ;
+- activation ou désactivation individuelle de chaque entrée détectée ;
+- noms préremplis depuis l’API et personnalisables ;
+- capteurs de puissance, énergie ou volume créés selon les unités réellement renvoyées ;
+- attributs `api_index`, `api_type`, `api_name` et unités brutes pour vérifier facilement la correspondance physique ;
 - intervalle d’actualisation réglable de 2 à 300 secondes ;
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
@@ -33,8 +38,27 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - numéros de série et versions logicielles MIP, EM5 et MPR ;
 - batterie et communication de chaque compteur MPR ;
 - dernier événement affiché directement, avec l’historique récent en attribut ;
-- configuration et suppression des compteurs impulsionnels MPR EER39300 ;
-- modules gaz et eau optionnels, désactivés par défaut.
+- configuration et suppression des compteurs impulsionnels MPR EER39300.
+
+## Correspondance des voies
+
+L’intégration ne déduit plus la nature d’un compteur uniquement de sa position dans `UsageMeterList`.
+
+Sur les installations récentes exposant les cinq pinces séparément, on rencontre généralement :
+
+| Type API | Rôle |
+| --- | --- |
+| `Load1` à `Load5` | CT1 à CT5 |
+| `Heating`, `Cooling`, `Hot water`, `Sockets` | usages RT2012 agrégés |
+| `Others` | autres consommations calculées |
+| `Electricity Meter` | compteur électrique principal / TIC |
+| `Gas Meter`, `Cold Water Meter`, `Hot Water Meter` | compteurs impulsionnels selon l’installation |
+
+Les index exacts peuvent varier avec le firmware et la configuration. Un compteur dont `Unit_Energy` vaut `m3` est exposé comme **volume** et non comme énergie électrique.
+
+Quand `Load1` à `Load5` sont présents, ils sont activés par défaut avec `Others`, le compteur électrique/TIC et les compteurs en `m³`. Les anciens usages RT2012 agrégés sont alors désactivés par défaut pour éviter les doublons, mais peuvent être réactivés dans **Configurer**.
+
+La logique CT1–CT5 / Others / Electricity Meter est notamment cohérente avec le projet de référence [mathoudebine/homeassistant-wiser-em5](https://github.com/mathoudebine/homeassistant-wiser-em5).
 
 ## Installation avec HACS
 
@@ -48,15 +72,23 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 
 Renseignez l’adresse IP du MPI, le port HTTP, le nom d’utilisateur, le mot de passe et l’intervalle d’actualisation.
 
-Les paramètres et les noms des voies peuvent ensuite être modifiés dans **Paramètres → Appareils et services → WiserLink MPI → Configurer**.
+Les paramètres, l’état activé/désactivé et le nom de chaque voie détectée peuvent ensuite être modifiés dans **Paramètres → Appareils et services → WiserLink MPI → Configurer**.
 
 Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe est prérempli avec `admin` et reste modifiable.
 
-## Gaz et eau
+## Gaz, eau et compteurs impulsionnels
 
-Le gaz et l’eau nécessitent des modules optionnels. Leur absence n’entraîne aucune erreur et n’affecte pas les capteurs électriques ni l’état **MPI Online**. Les modules gaz et eau sont exposés comme des volumes cumulés en mètres cubes (`m³`), avec une icône propre à chaque fluide.
+Le gaz ou l’eau peuvent provenir d’un module impulsionnel MPR/MPE selon l’installation. Ils ne sont pas associés à un index fixe : l’intégration utilise le type et surtout l’unité renvoyés par le MPI.
 
-Lors d’une mise à jour depuis une ancienne version, les entités `Gaz Énergie` et `Eau de ville Énergie` sont automatiquement renommées en `Gaz Volume` et `Eau de ville Volume`. Les anciennes entités de puissance gaz/eau sont retirées du registre.
+Un `EnergyConsumed` en `m3` devient un capteur de volume `m³`. Une entrée électrique en `kWh` reste un capteur d’énergie, même si sa position dans la liste correspondait auparavant à un index supposé gaz/eau.
+
+## Mise à jour depuis 0.7.1
+
+La version 0.7.1 supposait à tort que les index 10 et 11 étaient respectivement gaz et eau. Cette hypothèse est supprimée.
+
+Les `unique_id` des mesures restent basés sur l’index API et le champ (`Power` ou `EnergyConsumed`) afin de conserver autant que possible les entités existantes. Si vous aviez explicitement activé les anciens faux capteurs gaz/eau de la 0.7.1, vérifiez leur unité et leurs statistiques après la mise à jour.
+
+Conservez vos anciens capteurs MQTT utilisés par le tableau Énergie tant que les nouvelles mesures WiserLink n’ont pas été validées sur votre installation.
 
 ## Écriture
 
