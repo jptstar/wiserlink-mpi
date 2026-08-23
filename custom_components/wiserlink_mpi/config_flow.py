@@ -13,12 +13,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WiserLinkAuthError, WiserLinkClient, WiserLinkError
 from .const import (
-    CONF_SCAN_INTERVAL,
     CONF_FAILURE_THRESHOLD,
-    CONF_ENABLE_GAS,
-    CONF_ENABLE_WATER,
     CONF_LOAD_NAME_PREFIX,
-    DEFAULT_METER_NAMES,
+    CONF_METER_ENABLED_PREFIX,
+    CONF_SCAN_INTERVAL,
     DEFAULT_FAILURE_THRESHOLD,
     DEFAULT_PASSWORD,
     DEFAULT_PORT,
@@ -26,6 +24,7 @@ from .const import (
     DEFAULT_USERNAME,
     DOMAIN,
 )
+from .meter import meter_default_name, meter_enabled
 
 
 class WiserLinkConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -35,12 +34,13 @@ class WiserLinkConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> WiserLinkOptionsFlow:
-        """Return the editable connection and load-name options flow."""
+        """Return the editable connection and meter options flow."""
         return WiserLinkOptionsFlow(config_entry)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Configure the connection and validate the local UsageMeter endpoint."""
         errors: dict[str, str] = {}
         if user_input is not None:
             await self.async_set_unique_id(user_input[CONF_HOST].lower())
@@ -84,15 +84,13 @@ class WiserLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                         mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
-                vol.Required(CONF_ENABLE_GAS, default=False): bool,
-                vol.Required(CONF_ENABLE_WATER, default=False): bool,
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
 
 class WiserLinkOptionsFlow(OptionsFlow):
-    """Edit network settings and friendly names for detected loads."""
+    """Edit network settings and every detected UsageMeter entry."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._entry = config_entry
@@ -100,10 +98,18 @@ class WiserLinkOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate and save all editable settings."""
+        """Validate and save connection, enabled meters and friendly names."""
         current = {**self._entry.data, **self._entry.options}
         coordinator = self._entry.runtime_data
-        meters = coordinator.data.get("UsageMeterList", []) if coordinator else []
+        meters = (
+            [
+                meter
+                for meter in coordinator.data.get("UsageMeterList", [])
+                if isinstance(meter, dict)
+            ]
+            if coordinator
+            else []
+        )
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -131,7 +137,8 @@ class WiserLinkOptionsFlow(OptionsFlow):
             vol.Required(CONF_USERNAME, default=current[CONF_USERNAME]): str,
             vol.Required(CONF_PASSWORD, default=current[CONF_PASSWORD]): str,
             vol.Required(
-                CONF_SCAN_INTERVAL, default=current[CONF_SCAN_INTERVAL]
+                CONF_SCAN_INTERVAL,
+                default=current.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             ): vol.All(vol.Coerce(int), vol.Range(min=2, max=300)),
             vol.Required(
                 CONF_FAILURE_THRESHOLD,
@@ -144,21 +151,23 @@ class WiserLinkOptionsFlow(OptionsFlow):
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
-            vol.Required(CONF_ENABLE_GAS, default=current.get(CONF_ENABLE_GAS, False)): bool,
-            vol.Required(
-                CONF_ENABLE_WATER, default=current.get(CONF_ENABLE_WATER, False)
-            ): bool,
         }
+
         for index, meter in enumerate(meters):
-            if not isinstance(meter, dict):
-                continue
-            if index == 10 and not current.get(CONF_ENABLE_GAS, False):
-                continue
-            if index == 11 and not current.get(CONF_ENABLE_WATER, False):
-                continue
-            key = f"{CONF_LOAD_NAME_PREFIX}{index}"
-            generic_name = DEFAULT_METER_NAMES.get(index, f"Voie {index + 1}")
-            fields[vol.Required(key, default=current.get(key, generic_name))] = str
+            enabled_key = f"{CONF_METER_ENABLED_PREFIX}{index}"
+            name_key = f"{CONF_LOAD_NAME_PREFIX}{index}"
+            fields[
+                vol.Required(
+                    enabled_key,
+                    default=meter_enabled(current, index, meter, meters),
+                )
+            ] = bool
+            fields[
+                vol.Required(
+                    name_key,
+                    default=current.get(name_key, meter_default_name(meter, index)),
+                )
+            ] = str
 
         return self.async_show_form(
             step_id="init", data_schema=vol.Schema(fields), errors=errors
