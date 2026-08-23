@@ -66,7 +66,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
                 ) from second_error
 
     async def _async_initial_usage(self) -> tuple[dict, float]:
-        """Require coherent samples before publishing the first HA state."""
+        """Require two consecutive coherent samples before first publication."""
         first, first_at = await self._async_read_usage_with_retry()
         await asyncio.sleep(_CONFIRM_DELAY_SECONDS)
         second, second_at = await self._async_read_usage_with_retry()
@@ -92,19 +92,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             self._meters(third),
             third_at - second_at,
         )
-        first_third = snapshot_anomalies(
-            self._meters(first),
-            self._meters(third),
-            third_at - first_at,
-        )
-        if not second_third or not first_third:
+        if not second_third:
             return third, third_at
 
         raise WiserLinkError(
-            "Lectures UsageMeter incohérentes au démarrage: "
+            "Aucune paire de lectures UsageMeter consécutives cohérentes "
+            "au démarrage: "
             f"1→2 [{', '.join(first_second)}], "
-            f"2→3 [{', '.join(second_third)}], "
-            f"1→3 [{', '.join(first_third)}]"
+            f"2→3 [{', '.join(second_third)}]"
         )
 
     async def _async_confirmed_usage(self) -> tuple[dict, float]:
