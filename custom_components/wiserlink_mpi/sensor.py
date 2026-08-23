@@ -114,13 +114,15 @@ def _metrics_for_meter(
 ) -> tuple[Metric, ...]:
     """Build metrics from the selected unit, falling back to the Wiser API."""
     metrics: list[Metric] = []
-    if "Power" in meter and normalized_power_unit(meter) == "w":
+    unit = meter_effective_unit(settings, index, meter)
+
+    # A channel treated as a volume must never expose an electrical power sensor.
+    if unit != METER_UNIT_M3 and "Power" in meter and normalized_power_unit(meter) == "w":
         metrics.append(POWER_METRIC)
 
     if "EnergyConsumed" not in meter:
         return tuple(metrics)
 
-    unit = meter_effective_unit(settings, index, meter)
     if unit == METER_UNIT_M3:
         metrics.append(VOLUME_METRIC)
     elif unit == METER_UNIT_WH:
