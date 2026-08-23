@@ -16,12 +16,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, METER_UNIT_KWH, METER_UNIT_M3, METER_UNIT_WH
 from .coordinator import WiserLinkCoordinator
 from .meter import (
     is_gas_meter,
-    is_volume_meter,
     is_water_meter,
+    meter_effective_unit,
     meter_enabled,
     meter_name,
     normalized_energy_unit,
@@ -57,6 +57,14 @@ ENERGY_METRIC = Metric(
     SensorStateClass.TOTAL_INCREASING,
     "EnergyValidity",
 )
+ENERGY_WH_METRIC = Metric(
+    "EnergyConsumed",
+    "Énergie",
+    UnitOfEnergy.WATT_HOUR,
+    SensorDeviceClass.ENERGY,
+    SensorStateClass.TOTAL_INCREASING,
+    "EnergyValidity",
+)
 VOLUME_METRIC = Metric(
     "EnergyConsumed",
     "Volume",
@@ -65,6 +73,23 @@ VOLUME_METRIC = Metric(
     SensorStateClass.TOTAL_INCREASING,
     "EnergyValidity",
 )
+
+_MPR_TYPE_NAMES = {
+    "Gas Meter": "Compteur gaz",
+    "Cold Water Meter": "Compteur eau froide",
+    "Hot Water Meter": "Compteur eau chaude",
+    "Water Meter": "Compteur eau",
+    "Calorimeter": "Calorimètre",
+}
+
+_MPR_USAGE_NAMES = {
+    "No usage": "Aucun usage",
+    "Heating": "Chauffage",
+    "Hot water": "Eau chaude",
+    "Cooling": "Climatisation",
+    "Sockets": "Prises",
+    "Others": "Autres",
+}
 
 
 def _entry_prefix(entry: ConfigEntry) -> str:
@@ -84,43 +109,24 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
     )
 
 
-def _metrics_for_meter(meter: dict[str, Any]) -> tuple[Metric, ...]:
-    """Build metrics from API units instead of fixed list indexes."""
+def _metrics_for_meter(
+    settings: dict[str, Any], index: int, meter: dict[str, Any]
+) -> tuple[Metric, ...]:
+    """Build metrics from the selected unit, falling back to the Wiser API."""
     metrics: list[Metric] = []
     if "Power" in meter and normalized_power_unit(meter) == "w":
         metrics.append(POWER_METRIC)
 
     if "EnergyConsumed" not in meter:
         return tuple(metrics)
-    if is_volume_meter(meter):
-        metrics.append(VOLUME_METRIC)
-        return tuple(metrics)
 
-    unit = normalized_energy_unit(meter)
-    if unit in {"", "kwh"}:
-        metrics.append(ENERGY_METRIC)
-    elif unit == "wh":
-        metrics.append(
-            Metric(
-                "EnergyConsumed",
-                "Énergie",
-                UnitOfEnergy.WATT_HOUR,
-                SensorDeviceClass.ENERGY,
-                SensorStateClass.TOTAL_INCREASING,
-                "EnergyValidity",
-            )
-        )
+    unit = meter_effective_unit(settings, index, meter)
+    if unit == METER_UNIT_M3:
+        metrics.append(VOLUME_METRIC)
+    elif unit == METER_UNIT_WH:
+        metrics.append(ENERGY_WH_METRIC)
     else:
-        metrics.append(
-            Metric(
-                "EnergyConsumed",
-                "Énergie",
-                meter.get("Unit_Energy") or UnitOfEnergy.KILO_WATT_HOUR,
-                SensorDeviceClass.ENERGY,
-                SensorStateClass.TOTAL_INCREASING,
-                "EnergyValidity",
-            )
-        )
+        metrics.append(ENERGY_METRIC)
     return tuple(metrics)
 
 
@@ -137,13 +143,13 @@ async def async_setup_entry(
         if isinstance(meter, dict)
     ]
     settings = {**entry.data, **entry.options}
-    _remove_obsolete_fluid_power_entities(hass, entry, meters)
+    _remove_obsolete_volume_power_entities(hass, entry, settings, meters)
 
     async_add_entities(
         WiserLinkSensor(coordinator, entry, index, meter, metric)
         for index, meter in enumerate(meters)
         if meter_enabled(settings, index, meter, meters)
-        for metric in _metrics_for_meter(meter)
+        for metric in _metrics_for_meter(settings, index, meter)
     )
 
     diagnostics: list[tuple[str, str, Callable[[dict], Any]]] = [
@@ -219,6 +225,22 @@ def _mpr_extension_value(data: dict, field: str) -> str | None:
     )
 
 
+def _mpr_type_name(value: Any) -> str | None:
+    """Translate an MPR meter type for display while preserving unknown values."""
+    if value is None:
+        return None
+    text = str(value)
+    return _MPR_TYPE_NAMES.get(text, text)
+
+
+def _mpr_usage_name(value: Any) -> str | None:
+    """Translate an MPR RT2012 usage for diagnostics."""
+    if value is None:
+        return None
+    text = str(value)
+    return _MPR_USAGE_NAMES.get(text, text)
+
+
 class WiserLinkDiagnosticSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
     """A textual diagnostic value reported by the MPI."""
 
@@ -284,7 +306,7 @@ class WiserLinkMprConfigurationSensor(
     def __init__(self, coordinator, entry, meter_id) -> None:
         super().__init__(coordinator)
         self._meter_id = meter_id
-        self._attr_name = f"MPR {meter_id} Configuration"
+        self._attr_name = f"Configuration MPR {meter_id}"
         self._attr_unique_id = f"{_entry_prefix(entry)}_mpr_{meter_id}_configuration"
         self._attr_device_info = _device_info(entry)
 
@@ -301,13 +323,13 @@ class WiserLinkMprConfigurationSensor(
     @property
     def native_value(self) -> str | None:
         meter = self._meter()
-        return meter.get("Type") if meter else None
+        return _mpr_type_name(meter.get("Type")) if meter else None
 
     @property
     def extra_state_attributes(self) -> dict:
         meter = self._meter() or {}
         return {
-            "usage_rt2012": meter.get("Usage"),
+            "usage_rt2012": _mpr_usage_name(meter.get("Usage")),
             "poids_impulsion": meter.get("PulseWeight"),
             "unite_impulsion": meter.get("PulseWeightUnit"),
             "adresse_radio": meter.get("RfAddress"),
@@ -349,14 +371,17 @@ def _event_description(event: dict) -> str:
     return f"Événement source {source}, code {code}, état {state}"
 
 
-def _remove_obsolete_fluid_power_entities(
-    hass: HomeAssistant, entry: ConfigEntry, meters: list[dict]
+def _remove_obsolete_volume_power_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    settings: dict[str, Any],
+    meters: list[dict],
 ) -> None:
-    """Remove legacy power entities for entries that are actually volumes."""
+    """Remove legacy power entities for entries explicitly treated as volumes."""
     registry = er.async_get(hass)
     prefix = _entry_prefix(entry)
     for index, meter in enumerate(meters):
-        if not is_volume_meter(meter):
+        if meter_effective_unit(settings, index, meter) != METER_UNIT_M3:
             continue
         entity_id = registry.async_get_entity_id(
             "sensor", DOMAIN, f"{prefix}_{index}_power"
@@ -418,9 +443,18 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
             return None
         value = meter.get(self._metric.field)
         try:
-            return Decimal(str(value)) if value is not None else None
+            numeric = Decimal(str(value)) if value is not None else None
         except (InvalidOperation, TypeError, ValueError):
             return None
+        if numeric is None or self._metric.field != "EnergyConsumed":
+            return numeric
+
+        source_unit = normalized_energy_unit(meter)
+        if self._metric.unit == UnitOfEnergy.KILO_WATT_HOUR and source_unit == "wh":
+            return numeric / Decimal("1000")
+        if self._metric.unit == UnitOfEnergy.WATT_HOUR and source_unit == "kwh":
+            return numeric * Decimal("1000")
+        return numeric
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -431,4 +465,5 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
             "api_name": meter.get("Name"),
             "api_power_unit": meter.get("Unit_Power"),
             "api_energy_unit": meter.get("Unit_Energy"),
+            "unite_selectionnee": self._metric.unit,
         }
