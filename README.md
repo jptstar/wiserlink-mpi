@@ -33,7 +33,10 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
 - rejet des valeurs reçues lors d’une erreur ou d’une réponse corrompue ;
-- protection contre les valeurs 32 bits aberrantes autour de `0x7fffffff` / `0x80000000`, y compris lors de la première lecture après un redémarrage ;
+- protection contre les valeurs 32 bits aberrantes autour de `0x7fffffff` / `0x80000000` ;
+- double lecture cohérente avant de publier les premiers états après un redémarrage ;
+- relecture immédiate après une lecture invalide ou une variation cumulative suspecte ;
+- confirmation des remises à zéro réelles avant adoption d’une nouvelle base ;
 - entité **MPI Online** classée dans les diagnostics ;
 - état EM5 et communications avec le MIP et le compteur électrique ;
 - numéros de série et versions logicielles MIP, EM5 et MPR ;
@@ -81,9 +84,15 @@ Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe es
 
 Les réponses `/vesta/UsageMeter` sont validées avant d’être transmises à Home Assistant. Les valeurs non numériques, non finies, les index cumulés négatifs et les valeurs correspondant à une corruption/limite 32 bits sont rejetés pour les mesures de puissance, d’énergie et de volume.
 
-La validation est absolue et ne dépend pas d’une mesure précédente : une lecture aberrante reçue juste après le redémarrage de Home Assistant ou du MPI est donc rejetée avant la création ou la mise à jour des états. Lorsqu’une lecture échoue après le démarrage, le coordinateur conserve les dernières valeurs valides pendant le nombre de tentatives configuré, puis marque les entités indisponibles si le défaut persiste.
+Depuis la version 0.8.3, l’acquisition ajoute une seconde couche de sécurité temporelle. Au démarrage, aucune première valeur n’est publiée seule : deux snapshots cohérents sont requis. Si les deux premières lectures ne sont pas cohérentes, une troisième lecture permet de retenir la paire stable. Cela protège notamment contre les zéros ou snapshots partiels transitoires pendant le démarrage du MPI.
 
-Cette protection empêche de nouvelles valeurs du type `2 147 483,xx kWh` d’entrer dans les statistiques. Les statistiques déjà enregistrées avant la mise à jour doivent toutefois être corrigées manuellement dans Home Assistant via **Outils de développement → Statistiques**.
+En fonctionnement, une lecture rejetée est relue immédiatement. Une variation cumulative suspecte — compteur qui recule, structure des voies qui change ou saut d’énergie disproportionné par rapport aux puissances mesurées — déclenche aussi une lecture de confirmation avant toute publication. Si la lecture suivante revient dans la continuité, l’échantillon transitoire est ignoré. Si deux lectures successives confirment une nouvelle base cohérente, par exemple après une vraie remise à zéro d’un compteur, cette nouvelle base est acceptée sans modifier artificiellement les valeurs reçues.
+
+Les champs `PowerValidity` et `EnergyValidity` restent respectés par les entités : une mesure explicitement invalide n’est pas utilisée pour décider de la continuité d’un compteur.
+
+Lorsqu’une lecture reste invalide, le coordinateur conserve les dernières valeurs valides pendant le nombre de tentatives configuré, puis marque les entités indisponibles si le défaut persiste.
+
+Cette protection empêche de nouvelles valeurs du type `2 147 483,xx kWh` d’entrer dans les statistiques et réduit le risque d’autres valeurs transitoires au redémarrage. Les statistiques déjà enregistrées avant la mise à jour doivent toutefois être corrigées manuellement dans Home Assistant via **Outils de développement → Statistiques**.
 
 ## Gaz, eau et compteurs impulsionnels
 
