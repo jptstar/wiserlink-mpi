@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
 from aiohttp import BasicAuth, ClientError, ClientSession
 
 from .const import MPR_INSTANCES_PATH, SEM_IDENTIFICATION_PATH, USAGE_METER_PATH
+from .validation import UsageMeterValidationError, validate_usage_meters
 
 
 class WiserLinkError(Exception):
@@ -37,13 +37,16 @@ class WiserLinkClient:
         self._webpage_version: str | None = None
 
     async def async_get_usage_meters(self) -> dict[str, Any]:
-        """Read all meters in one request."""
+        """Read and validate all meters in one request."""
         result = await self._request("GET", USAGE_METER_PATH)
         if not isinstance(result, dict) or not isinstance(
             result.get("UsageMeterList"), list
         ):
             raise WiserLinkError("Réponse UsageMeter invalide")
-        self._validate_usage_meters(result["UsageMeterList"])
+        try:
+            validate_usage_meters(result["UsageMeterList"])
+        except UsageMeterValidationError as err:
+            raise WiserLinkError(str(err)) from err
         return result
 
     async def async_get_sem_identification(self) -> dict[str, Any]:
@@ -143,40 +146,6 @@ class WiserLinkClient:
             if attempt < 6:
                 await asyncio.sleep(5)
         raise WiserLinkError("Délai dépassé pendant la configuration MPR")
-
-    @staticmethod
-    def _validate_usage_meters(meters: list[Any]) -> None:
-        """Reject a corrupted snapshot without replacing known good values."""
-        if not meters:
-            raise WiserLinkError("La réponse UsageMeter ne contient aucune voie")
-
-        valid_value_found = False
-        for index, meter in enumerate(meters):
-            if not isinstance(meter, dict):
-                raise WiserLinkError(f"Voie {index + 1} invalide")
-
-            for field in ("Power", "EnergyConsumed"):
-                value = meter.get(field)
-                if value is None:
-                    continue
-                try:
-                    numeric_value = Decimal(str(value))
-                except (InvalidOperation, TypeError, ValueError) as err:
-                    raise WiserLinkError(
-                        f"Valeur {field} invalide pour la voie {index + 1}"
-                    ) from err
-                if not numeric_value.is_finite():
-                    raise WiserLinkError(
-                        f"Valeur {field} non finie pour la voie {index + 1}"
-                    )
-                if field == "EnergyConsumed" and numeric_value < 0:
-                    raise WiserLinkError(
-                        f"Index d’énergie négatif pour la voie {index + 1}"
-                    )
-                valid_value_found = True
-
-        if not valid_value_found:
-            raise WiserLinkError("La réponse UsageMeter ne contient aucune mesure")
 
     async def async_send_command(
         self, method: str, path: str, payload: dict[str, Any] | None

@@ -33,6 +33,7 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - seuil de reconnexion réglable de 1 à 20 tentatives ;
 - conservation des dernières valeurs pendant les tentatives ;
 - rejet des valeurs reçues lors d’une erreur ou d’une réponse corrompue ;
+- protection contre les valeurs 32 bits aberrantes autour de `0x7fffffff` / `0x80000000`, y compris lors de la première lecture après un redémarrage ;
 - entité **MPI Online** classée dans les diagnostics ;
 - état EM5 et communications avec le MIP et le compteur électrique ;
 - numéros de série et versions logicielles MIP, EM5 et MPR ;
@@ -75,6 +76,14 @@ Renseignez l’adresse IP du MPI, le port HTTP, le nom d’utilisateur, le mot d
 Les paramètres, l’état activé/désactivé et le nom de chaque voie détectée peuvent ensuite être modifiés dans **Paramètres → Appareils et services → WiserLink MPI → Configurer**.
 
 Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe est prérempli avec `admin` et reste modifiable.
+
+## Protection des mesures et statistiques
+
+Les réponses `/vesta/UsageMeter` sont validées avant d’être transmises à Home Assistant. Les valeurs non numériques, non finies, les index cumulés négatifs et les valeurs correspondant à une corruption/limite 32 bits sont rejetés pour les mesures de puissance, d’énergie et de volume.
+
+La validation est absolue et ne dépend pas d’une mesure précédente : une lecture aberrante reçue juste après le redémarrage de Home Assistant ou du MPI est donc rejetée avant la création ou la mise à jour des états. Lorsqu’une lecture échoue après le démarrage, le coordinateur conserve les dernières valeurs valides pendant le nombre de tentatives configuré, puis marque les entités indisponibles si le défaut persiste.
+
+Cette protection empêche de nouvelles valeurs du type `2 147 483,xx kWh` d’entrer dans les statistiques. Les statistiques déjà enregistrées avant la mise à jour doivent toutefois être corrigées manuellement dans Home Assistant via **Outils de développement → Statistiques**.
 
 ## Gaz, eau et compteurs impulsionnels
 
