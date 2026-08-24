@@ -1,7 +1,7 @@
 # WiserLink MPI pour Home Assistant
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/jptstar/wiserlink-mpi/main/custom_components/wiserlink_mpi/brand/icon@2x.png" alt="Logo WiserLink MPI" width="220">
+  <img src="brand/logo@2x.png" alt="WiserLink MPI" width="520">
 </p>
 
 Intégration locale pour WiserLink MPI / Wiser Energy EER31600 et EER39300.
