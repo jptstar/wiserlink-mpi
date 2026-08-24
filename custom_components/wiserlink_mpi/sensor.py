@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
+from homeassistant.components.energy.data import async_get_manager
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfVolume
@@ -73,6 +74,8 @@ VOLUME_METRIC = Metric(
     SensorStateClass.TOTAL_INCREASING,
     "EnergyValidity",
 )
+
+_LEGACY_GAS_ENERGY_ENTITY_ID = "sensor.wiser_energy_gaz_conso"
 
 _MPR_TYPE_NAMES = {
     "Gas Meter": "Compteur gaz",
@@ -146,6 +149,7 @@ async def async_setup_entry(
     ]
     settings = {**entry.data, **entry.options}
     _remove_obsolete_volume_power_entities(hass, entry, settings, meters)
+    await _migrate_energy_dashboard_gas_source(hass, entry, settings, meters)
 
     async_add_entities(
         WiserLinkSensor(coordinator, entry, index, meter, metric)
@@ -217,6 +221,56 @@ async def async_setup_entry(
         if meter.get("Id") is not None
     )
     async_add_entities([WiserLinkEventsSensor(coordinator, entry)])
+
+
+async def _migrate_energy_dashboard_gas_source(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    settings: dict[str, Any],
+    meters: list[dict],
+) -> None:
+    """Replace the legacy gas source in Energy preferences with the WiserLink meter."""
+    registry = er.async_get(hass)
+    prefix = _entry_prefix(entry)
+    gas_entity_ids: list[str] = []
+
+    for index, meter in enumerate(meters):
+        if (
+            not meter_enabled(settings, index, meter, meters)
+            or meter_effective_unit(settings, index, meter) != METER_UNIT_M3
+            or not is_gas_meter(meter)
+        ):
+            continue
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{prefix}_{index}_energyconsumed"
+        )
+        if entity_id is not None:
+            gas_entity_ids.append(entity_id)
+
+    # Only migrate when the destination is unambiguous. This preserves the user's
+    # current WiserLink entity_id and therefore its existing long-term statistics.
+    if len(gas_entity_ids) != 1:
+        return
+
+    manager = await async_get_manager(hass)
+    if manager.data is None:
+        return
+
+    replacement = gas_entity_ids[0]
+    changed = False
+    sources = []
+    for source in manager.data["energy_sources"]:
+        updated_source = source.copy()
+        if (
+            updated_source.get("type") == "gas"
+            and updated_source.get("stat_energy_from") == _LEGACY_GAS_ENERGY_ENTITY_ID
+        ):
+            updated_source["stat_energy_from"] = replacement
+            changed = True
+        sources.append(updated_source)
+
+    if changed:
+        await manager.async_update({"energy_sources": sources})
 
 
 def _mpr_extension_value(data: dict, field: str) -> str | None:
@@ -412,7 +466,12 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
         self._attr_name = f"{meter_name(settings, meter, index)} {metric.label}"
         self._attr_unique_id = f"{_entry_prefix(entry)}_{index}_{metric.field.lower()}"
         self._attr_native_unit_of_measurement = metric.unit
-        self._attr_device_class = metric.device_class
+        if metric is VOLUME_METRIC and is_gas_meter(meter):
+            self._attr_device_class = SensorDeviceClass.GAS
+        elif metric is VOLUME_METRIC and is_water_meter(meter):
+            self._attr_device_class = SensorDeviceClass.WATER
+        else:
+            self._attr_device_class = metric.device_class
         self._attr_state_class = metric.state_class
         if is_gas_meter(meter):
             self._attr_icon = "mdi:meter-gas"
