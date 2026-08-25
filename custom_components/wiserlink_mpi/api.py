@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal, InvalidOperation
+from http.cookies import SimpleCookie
 import logging
 import re
 from typing import Any
@@ -52,6 +54,8 @@ class WiserLinkClient:
     ) -> None:
         self._session = session
         self._base_url = f"http://{host}:{port}"
+        self._username = username
+        self._password = password
         self._auth = BasicAuth(username, password)
         self._webpage_version: str | None = None
         self._web_api_surface: dict[str, Any] | None = None
@@ -79,8 +83,6 @@ class WiserLinkClient:
     @staticmethod
     def _analyse_main_javascript(javascript: str) -> dict[str, Any]:
         """Extract explicit Vesta routes and radio-related symbols from main.js."""
-        # Some builds escape slashes inside JavaScript strings. Normalizing them
-        # keeps the scan read-only while allowing one parser to support both forms.
         normalized = javascript.replace("\\/", "/")
 
         version_match = re.search(
@@ -164,6 +166,19 @@ class WiserLinkClient:
             raise WiserLinkError("Réponse EventList invalide")
         return result
 
+    @staticmethod
+    def _same_mpr_configuration(current: dict[str, Any], payload: dict[str, Any]) -> bool:
+        """Return True when a requested MPR update would be a dangerous no-op."""
+        for key in ("Id", "Type", "Usage", "PulseWeightUnit", "RfAddress"):
+            if str(current.get(key)) != str(payload.get(key)):
+                return False
+        try:
+            return Decimal(str(current.get("PulseWeight"))) == Decimal(
+                str(payload.get("PulseWeight"))
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+
     async def async_configure_mpr(
         self,
         meter_id: int,
@@ -175,16 +190,7 @@ class WiserLinkClient:
     ) -> dict[str, Any]:
         """Create or update one MPR meter using the official web UI format."""
         instances = await self.async_get_mpr_instances()
-        method = (
-            "PUT"
-            if any(item.get("Id") == meter_id for item in instances)
-            else "POST"
-        )
-        path = (
-            f"/vesta/MpeEndpoint;Id={meter_id}"
-            if method == "PUT"
-            else MPR_INSTANCES_PATH
-        )
+        current = next((item for item in instances if item.get("Id") == meter_id), None)
         payload = {
             "Id": meter_id,
             "Type": meter_type,
@@ -193,9 +199,23 @@ class WiserLinkClient:
             "PulseWeightUnit": pulse_weight_unit,
             "RfAddress": radio_address,
         }
+
+        # Real-device testing showed that even an identical PUT starts the MPR
+        # radio configuration procedure and can finish with Param=-1. Never send
+        # an existing configuration again when nothing actually changed.
+        if current is not None and self._same_mpr_configuration(current, payload):
+            _LOGGER.info("Configuration MPR %s inchangée, aucune écriture envoyée", meter_id)
+            return {**payload, "_unchanged": True}
+
+        method = "PUT" if current is not None else "POST"
+        path = (
+            f"/vesta/MpeEndpoint;Id={meter_id}"
+            if method == "PUT"
+            else MPR_INSTANCES_PATH
+        )
         await self._request(method, path, payload)
         await self._async_wait_configuration()
-        return payload
+        return {**payload, "_unchanged": False}
 
     async def async_delete_mpr(self, meter_id: int) -> None:
         """Delete exactly one existing MPR meter."""
@@ -206,8 +226,8 @@ class WiserLinkClient:
         await self._async_wait_configuration()
 
     async def _async_wait_configuration(self) -> None:
-        """Wait for the MPI to apply an MPR configuration change."""
-        for attempt in range(7):
+        """Wait up to 120 seconds for an MPR configuration result."""
+        for attempt in range(25):
             result = await self._request(
                 "POST",
                 "/vesta/Firmware/methods/checkSubmitAction",
@@ -218,9 +238,58 @@ class WiserLinkClient:
                 return
             if status == -1:
                 raise WiserLinkError("Le MPI a refusé la configuration MPR")
-            if attempt < 6:
+            if attempt < 24:
                 await asyncio.sleep(5)
         raise WiserLinkError("Délai dépassé pendant la configuration MPR")
+
+    async def async_reboot(self) -> None:
+        """Reboot the EER31600 through the authenticated Web session API."""
+        try:
+            async with self._session.post(
+                f"{self._base_url}/rs/login",
+                json={"username": self._username, "password": self._password},
+                timeout=10,
+            ) as response:
+                if response.status in (401, 403):
+                    raise WiserLinkAuthError("Identifiants refusés par le MPI")
+                if response.status >= 400:
+                    body = (await response.text())[:300]
+                    raise WiserLinkError(
+                        f"Connexion session Web refusée HTTP {response.status}: {body}"
+                    )
+
+                sid = response.cookies.get("SID")
+                sid_value = sid.value if sid is not None else None
+                if not sid_value:
+                    cookie = SimpleCookie()
+                    for header in response.headers.getall("Set-Cookie", []):
+                        cookie.load(header)
+                    if "SID" in cookie:
+                        sid_value = cookie["SID"].value
+                await response.read()
+
+            if not sid_value:
+                raise WiserLinkError("Le MPI n'a pas renvoyé de cookie SID")
+
+            async with self._session.post(
+                f"{self._base_url}/rs/Device/methods/Reboot",
+                auth=self._auth,
+                cookies={"SID": sid_value},
+                json={},
+                timeout=10,
+            ) as response:
+                if response.status in (401, 403):
+                    raise WiserLinkAuthError("Session de redémarrage refusée par le MPI")
+                if response.status >= 400:
+                    body = (await response.text())[:300]
+                    raise WiserLinkError(
+                        f"Redémarrage refusé HTTP {response.status}: {body}"
+                    )
+                await response.read()
+        except WiserLinkError:
+            raise
+        except (ClientError, TimeoutError) as err:
+            raise WiserLinkError(str(err)) from err
 
     async def async_send_command(
         self, method: str, path: str, payload: dict[str, Any] | None
