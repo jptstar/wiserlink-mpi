@@ -27,7 +27,7 @@
     "step": {
       "init": {
         "title": "Configurer le WiserLink MPI",
-        "description": "Activez ou désactivez chaque entrée détectée. Les noms proviennent du Wiser/MPI sauf si vous les personnalisez ici. L’unité peut rester en Auto (valeur du Wiser) ou être forcée en kWh, Wh ou m³.",
+        "description": "Activez ou désactivez chaque entrée détectée. Pour le gaz MPR/MPE, le contrôle de dérive peut mémoriser la dernière relève détectée, protéger l’index contre les zéros après redémarrage et demander au maximum un redémarrage correctif par jour. Il est désactivé par défaut.",
         "data": {
           "host": "Adresse IP ou nom d’hôte",
           "port": "Port HTTP",
@@ -35,6 +35,10 @@
           "password": "Mot de passe",
           "scan_interval": "Intervalle de lecture (secondes)",
           "failure_threshold": "Échecs consécutifs avant indisponibilité",
+          "gas_drift_control": "Contrôle automatique de dérive gaz",
+          "gas_target_time": "Heure cible de relève gaz",
+          "gas_tolerance_minutes": "Tolérance de dérive gaz",
+          "gas_control_time": "Heure de contrôle avant minuit",
           "meter_enabled_0": "Activer CT1",
           "load_name_0": "Nom CT1",
           "meter_unit_0": "Unité CT1",
