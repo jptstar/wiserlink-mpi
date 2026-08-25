@@ -110,12 +110,10 @@ class WiserLinkOnlineSensor(
 
     @property
     def available(self) -> bool:
-        """Keep the entity itself available so it can explicitly report offline."""
         return True
 
     @property
     def is_on(self) -> bool:
-        """Return the result of the latest coordinated read."""
         return self.coordinator.last_update_success
 
 
@@ -137,7 +135,6 @@ class WiserLinkCommunicationSensor(
 
     @property
     def is_on(self) -> bool | None:
-        """Return the reported communication state."""
         value = self.coordinator.data.get("_sem_identification", {}).get(
             self._field
         )
@@ -174,7 +171,6 @@ class WiserLinkMprBinarySensor(
 
     @property
     def is_on(self) -> bool | None:
-        """Return connectivity, or an alert when the battery is low."""
         meter = next(
             (
                 item
@@ -226,6 +222,10 @@ class WiserLinkGasDriftSensor(
             "tolerance_minutes": data.get("tolerance_minutes"),
             "heure_controle": data.get("control_time"),
             "controle_automatique": data.get("automatic_control"),
+            "releves_confirmees": data.get("confirmed_samples"),
+            "attente_releve_apres_reboot": data.get("awaiting_post_reboot_reading"),
+            "reboot_auto_suspendu": data.get("automatic_reboot_suspended"),
+            "raison_suspension_reboot": data.get("automatic_reboot_suspend_reason"),
             "index_gaz_observe_m3": data.get("raw_value"),
             "dernier_redemarrage": self._local_iso(data.get("last_reboot_at")),
             "raison_dernier_redemarrage": data.get("last_reboot_reason"),
