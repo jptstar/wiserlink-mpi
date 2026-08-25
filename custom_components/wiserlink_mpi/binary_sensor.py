@@ -226,9 +226,7 @@ class WiserLinkGasDriftSensor(
             "tolerance_minutes": data.get("tolerance_minutes"),
             "heure_controle": data.get("control_time"),
             "controle_automatique": data.get("automatic_control"),
-            "dernier_index_valide_m3": data.get("last_valid_value"),
-            "index_brut_m3": data.get("raw_value"),
-            "cache_protege": data.get("cache_protected"),
+            "index_gaz_observe_m3": data.get("raw_value"),
             "dernier_redemarrage": self._local_iso(data.get("last_reboot_at")),
             "raison_dernier_redemarrage": data.get("last_reboot_reason"),
         }
