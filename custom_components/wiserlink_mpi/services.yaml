@@ -35,7 +35,7 @@ send_command:
 
 configure_mpr:
   name: Configurer un compteur MPR
-  description: Ajoute ou modifie un compteur impulsionnel radio EER39300.
+  description: Ajoute ou modifie un compteur impulsionnel radio EER39300. Une configuration strictement identique n'est pas réécrite.
   fields:
     entry_id:
       name: Configuration
@@ -120,3 +120,14 @@ delete_mpr:
           min: 0
           max: 3
           mode: box
+
+reboot_mip:
+  name: Redémarrer le Wiser MIP
+  description: Redémarre le EER31600 via la session Web locale confirmée sur le matériel. Les dernières valeurs gaz valides sont conservées pendant le redémarrage.
+  fields:
+    entry_id:
+      name: Configuration
+      required: true
+      selector:
+        config_entry:
+          integration: wiserlink_mpi
