@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -10,6 +11,24 @@ from aiohttp import BasicAuth, ClientError, ClientSession
 
 from .const import MPR_INSTANCES_PATH, SEM_IDENTIFICATION_PATH, USAGE_METER_PATH
 from .validation import UsageMeterValidationError, validate_usage_meters
+
+_LOGGER = logging.getLogger(__name__)
+
+_WEB_API_KEYWORDS = (
+    "MpeEndpoint",
+    "MprEndpoint",
+    "WirelessManager",
+    "WirelessDiagnostic",
+    "WirelessMeter",
+    "blinkDevice",
+    "startCommissioning",
+    "stopCommissioning",
+    "commissioning",
+    "forceRefresh",
+    "refresh",
+    "requestRead",
+    "poll",
+)
 
 
 class WiserLinkError(Exception):
@@ -35,6 +54,7 @@ class WiserLinkClient:
         self._base_url = f"http://{host}:{port}"
         self._auth = BasicAuth(username, password)
         self._webpage_version: str | None = None
+        self._web_api_surface: dict[str, Any] | None = None
 
     async def async_get_usage_meters(self) -> dict[str, Any]:
         """Read and validate all meters in one request."""
@@ -56,19 +76,74 @@ class WiserLinkClient:
             raise WiserLinkError("Réponse SemIdentification invalide")
         return result
 
+    @staticmethod
+    def _analyse_main_javascript(javascript: str) -> dict[str, Any]:
+        """Extract explicit Vesta routes and radio-related symbols from main.js."""
+        # Some builds escape slashes inside JavaScript strings. Normalizing them
+        # keeps the scan read-only while allowing one parser to support both forms.
+        normalized = javascript.replace("\\/", "/")
+
+        version_match = re.search(
+            r"WpVersion\s*:\s*[\"']([^\"']+)[\"']", normalized
+        )
+        version = version_match.group(1) if version_match else "Inconnue"
+
+        routes = sorted(
+            {
+                match.rstrip(",.)]}")
+                for match in re.findall(
+                    r"/vesta/[A-Za-z0-9_./;=?:&%+\-,]+", normalized
+                )
+            }
+        )
+        methods = sorted(
+            {
+                route.split("/methods/", 1)[1].split("/", 1)[0]
+                for route in routes
+                if "/methods/" in route and route.split("/methods/", 1)[1]
+            }
+        )
+        keywords = [
+            keyword
+            for keyword in _WEB_API_KEYWORDS
+            if re.search(re.escape(keyword), normalized, re.IGNORECASE)
+        ]
+
+        return {
+            "Webpage_Version": version,
+            "WebApi_Routes": routes,
+            "WebApi_Methods": methods,
+            "WebApi_RadioKeywords": keywords,
+        }
+
     async def async_get_mip_identification(self) -> dict[str, Any]:
-        """Read MIP identity and firmware information."""
+        """Read MIP identity, firmware and the read-only web API surface."""
         result = await self._request("GET", "/vesta/MipIdentification")
         if not isinstance(result, dict):
             raise WiserLinkError("Réponse MipIdentification invalide")
-        if self._webpage_version is None:
+
+        if self._web_api_surface is None:
             javascript = await self._request("GET", "/main.js")
             if isinstance(javascript, str):
-                match = re.search(r'WpVersion:"([^"]+)"', javascript)
-                self._webpage_version = match.group(1) if match else "Inconnue"
+                self._web_api_surface = self._analyse_main_javascript(javascript)
             else:
-                self._webpage_version = "Inconnue"
-        result["Webpage_Version"] = self._webpage_version
+                self._web_api_surface = {
+                    "Webpage_Version": "Inconnue",
+                    "WebApi_Routes": [],
+                    "WebApi_Methods": [],
+                    "WebApi_RadioKeywords": [],
+                }
+
+            self._webpage_version = self._web_api_surface["Webpage_Version"]
+            _LOGGER.info(
+                "Analyse main.js terminée: %d route(s) Vesta, %d méthode(s), "
+                "mots-clés radio=%s",
+                len(self._web_api_surface["WebApi_Routes"]),
+                len(self._web_api_surface["WebApi_Methods"]),
+                self._web_api_surface["WebApi_RadioKeywords"],
+            )
+
+        result.update(self._web_api_surface)
         return result
 
     async def async_get_mpr_instances(self) -> list[dict[str, Any]]:
