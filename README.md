@@ -45,7 +45,8 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - dernier événement affiché directement, avec l’historique récent et les codes bruts en attribut ;
 - configuration et suppression des compteurs impulsionnels MPR EER39300 ;
 - redémarrage explicite du EER31600 via la session Web locale ;
-- contrôle optionnel de dérive horaire des relèves gaz MPR/MPE avec heure cible, tolérance et heure de contrôle configurables.
+- contrôle optionnel de dérive horaire des relèves gaz MPR/MPE avec heure cible, tolérance et heure de contrôle configurables ;
+- apprentissage de l’heure réelle obtenue après un recalage afin d’éviter les reboots quotidiens inutiles.
 
 ## Correspondance des voies
 
@@ -85,29 +86,35 @@ Pour le contrôle de dérive gaz, les options suivantes sont également disponib
 
 - **Contrôle automatique de dérive gaz** : désactivé par défaut ;
 - **Heure cible de relève gaz** : `23:45` par défaut ;
-- **Tolérance de dérive gaz** : `15 min` par défaut ;
-- **Heure de contrôle avant minuit** : `23:55` par défaut.
+- **Tolérance de dérive gaz** : `10 min` par défaut ;
+- **Heure de contrôle / reboot correctif** : `23:35` par défaut.
+
+L’heure de contrôle doit être antérieure à l’heure cible. Si elle est égale ou postérieure, l’intégration n’effectue aucun reboot automatique afin d’éviter un redémarrage tardif ou après minuit.
 
 Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe est prérempli avec `admin` et reste modifiable.
 
 ## Contrôle de dérive des relèves gaz
 
-Le MPR/MPE peut publier son index suivant un cycle autonome qui dérive progressivement. L’intégration mémorise l’heure à laquelle une nouvelle valeur gaz est réellement observée et compare cette heure à la cible choisie dans la configuration.
+Le MPR/MPE peut publier son index suivant un cycle autonome qui dérive progressivement. L’intégration mémorise l’heure à laquelle une nouvelle valeur gaz est réellement observée et compare cette heure à la cible ou, après un recalage réussi, à l’heure réelle du cycle appris.
 
-La logique est volontairement simple :
+La logique est volontairement prudente :
 
 1. aucun redémarrage n’est effectué tant que le contrôle automatique n’est pas activé ;
-2. dès qu’une vraie relève gaz est détectée hors de la fenêtre `heure cible ± tolérance`, la dérive est mémorisée ;
-3. à l’heure de contrôle configurée, cette seule dérive suffit pour demander un redémarrage correctif du EER31600 ;
-4. si la dernière relève est dans la fenêtre autorisée, aucun redémarrage n’est effectué ;
-5. un seul redémarrage automatique peut être demandé dans une même journée ;
-6. après un redémarrage, l’intégration attend obligatoirement une nouvelle vraie relève avant d’autoriser un autre redémarrage automatique. Une ancienne dérive ne peut donc pas provoquer une boucle de reboots.
+2. à l’heure de contrôle, l’intégration juge **l’heure du dernier cycle réellement observé**, et non le fait que la relève du jour soit déjà arrivée ou non ;
+3. avec les valeurs par défaut, la fenêtre de correction est ouverte à `23:35` et fermée à `23:45` : aucun reboot automatique n’est lancé à `23:45` ou après ;
+4. si le dernier cycle connu est dans la tolérance, aucun redémarrage n’est effectué ;
+5. si le cycle est réellement hors tolérance, un seul redémarrage correctif peut être demandé dans la journée ;
+6. après ce reboot, l’intégration attend obligatoirement une nouvelle vraie relève gaz ;
+7. si cette nouvelle relève est proche de la cible, son heure réelle devient la référence de cycle ;
+8. si le reboot n’a pas suffisamment recalé le cycle, les reboots automatiques sont suspendus au lieu de redémarrer le Wiser tous les jours.
 
-Exemple avec une cible à `23:45`, une tolérance de `15 min` et un contrôle à `23:55` : une relève à `16:00` est hors fenêtre, donc le MIP redémarre à `23:55`. Une relève à `23:40` est dans la fenêtre `23:30–00:00`, donc aucun reboot n’est effectué. Si un reboot a déjà eu lieu, aucun second reboot n’est autorisé tant qu’une nouvelle relève réelle n’a pas été observée.
+Exemple : le compteur relève à `16:00`. À `23:35`, cette dérive est connue et le Wiser peut être redémarré. Si la première relève obtenue après correction arrive à `23:47`, l’intégration valide le recalage et mémorise `23:47` comme nouvelle référence. Le lendemain à `23:35`, l’absence de la relève du jour — normalement attendue vers `23:47` — ne provoque donc **aucun reboot**. Tant que le cycle reste autour de `23:47` dans la tolérance configurée, le Wiser n’est plus redémarré.
+
+À l’inverse, si un reboot correctif laisse la relève très éloignée de la cible, l’intégration considère la correction comme inefficace et suspend les reboots automatiques suivants. Désactiver puis réactiver le contrôle, ou modifier la cible, permet de repartir sur un nouveau cycle d’apprentissage.
 
 L’intégration ne modifie pas artificiellement l’index gaz pour cette fonction : elle observe la valeur réellement fournie par le WiserLink et utilise uniquement l’heure de changement pour mesurer la dérive.
 
-Une entité de diagnostic **Dérive relève gaz** expose notamment l’heure de la dernière relève détectée, l’estimation de la suivante, la dérive en minutes, les horaires configurés, le dernier redémarrage et l’indication d’attente d’une nouvelle relève après reboot.
+Une entité de diagnostic **Dérive relève gaz** expose notamment l’heure de la dernière relève détectée, l’estimation de la suivante, la dérive en minutes, les horaires configurés et le dernier redémarrage.
 
 ## Protection des mesures et statistiques
 
