@@ -421,7 +421,9 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             await self.client.async_reboot()
         except WiserLinkError:
             if automatic:
-                self._gas_last_auto_reboot_date = None
+                # Keep last_auto_reboot_date set: the request may have reached the
+                # device even if the HTTP response was lost. Never retry repeatedly
+                # inside the same evening correction window.
                 self._gas_awaiting_post_reboot_reading = False
                 self._gas_pre_reboot_target_drift = None
                 await self._async_save_gas_state()
@@ -516,9 +518,9 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             if self.data is not None and "_events" in self.data:
                 data["_events"] = self.data["_events"]
 
-        data["_gas_monitor"] = self.gas_monitor_data
         self.consecutive_failures = 0
         await self._async_maybe_correct_gas_drift()
+        data["_gas_monitor"] = self.gas_monitor_data
         return data
 
     @property
