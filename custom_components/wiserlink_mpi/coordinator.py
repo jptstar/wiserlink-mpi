@@ -28,6 +28,8 @@ from .const import (
 )
 from .gas_monitor import (
     circular_drift_minutes,
+    clock_minutes,
+    clock_string,
     next_estimated_reading,
     should_correct_drift,
 )
@@ -38,6 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 _CONFIRM_DELAY_SECONDS = 1.0
 _REBOOT_GRACE_SECONDS = 90.0
 _STORAGE_VERSION = 1
+_MIN_POST_REBOOT_SETTLE_MINUTES = 10
 
 
 class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
@@ -88,6 +91,18 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_last_reboot_reason: str | None = None
         self._gas_last_auto_reboot_date: str | None = None
 
+        # Once an automatic reboot successfully moves the MPE close to the target,
+        # the actual post-reboot publication time becomes the learned cycle
+        # reference. Example: a 23:35 reboot leads to a stable 23:47 publication;
+        # future drift is measured from 23:47 instead of rebooting every day to
+        # force an exact 23:45.
+        self._gas_cycle_reference_time: str | None = None
+        self._gas_reference_target_time: str | None = None
+        self._gas_awaiting_post_reboot_reading = False
+        self._gas_pre_reboot_target_drift: int | None = None
+        self._gas_auto_reboot_suspended = False
+        self._gas_auto_reboot_suspend_reason: str | None = None
+
     async def async_initialize(self) -> None:
         """Load persistent gas drift history before first polling."""
         saved = await self._gas_store.async_load() or {}
@@ -96,6 +111,52 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_last_reboot_at = self._parse_datetime(saved.get("last_reboot_at"))
         self._gas_last_reboot_reason = saved.get("last_reboot_reason")
         self._gas_last_auto_reboot_date = saved.get("last_auto_reboot_date")
+
+        saved_target = saved.get("reference_target_time")
+        target_unchanged = False
+        if saved_target:
+            try:
+                target_unchanged = (
+                    clock_minutes(saved_target) == clock_minutes(self._gas_target_time)
+                )
+            except (TypeError, ValueError):
+                target_unchanged = False
+
+        if target_unchanged:
+            reference = saved.get("cycle_reference_time")
+            self._gas_cycle_reference_time = str(reference) if reference else None
+            self._gas_reference_target_time = str(saved_target)
+            self._gas_awaiting_post_reboot_reading = bool(
+                saved.get("awaiting_post_reboot_reading", False)
+            )
+            pre_drift = saved.get("pre_reboot_target_drift")
+            self._gas_pre_reboot_target_drift = (
+                int(pre_drift) if pre_drift is not None else None
+            )
+            self._gas_auto_reboot_suspended = bool(
+                saved.get("auto_reboot_suspended", False)
+            )
+            self._gas_auto_reboot_suspend_reason = saved.get(
+                "auto_reboot_suspend_reason"
+            )
+        else:
+            # A changed target is an explicit request for a new alignment cycle.
+            self._gas_cycle_reference_time = None
+            self._gas_reference_target_time = self._gas_target_time
+            self._gas_awaiting_post_reboot_reading = False
+            self._gas_pre_reboot_target_drift = None
+            self._gas_auto_reboot_suspended = False
+            self._gas_auto_reboot_suspend_reason = None
+
+        if not self._gas_drift_control:
+            # Disabling the feature is also a clean way to clear a previous
+            # automatic-reboot suspension before enabling it again later.
+            self._gas_awaiting_post_reboot_reading = False
+            self._gas_pre_reboot_target_drift = None
+            self._gas_auto_reboot_suspended = False
+            self._gas_auto_reboot_suspend_reason = None
+
+        await self._async_save_gas_state()
 
     @staticmethod
     def _decimal(value: Any) -> Decimal | None:
@@ -133,6 +194,12 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
                 ),
                 "last_reboot_reason": self._gas_last_reboot_reason,
                 "last_auto_reboot_date": self._gas_last_auto_reboot_date,
+                "cycle_reference_time": self._gas_cycle_reference_time,
+                "reference_target_time": self._gas_target_time,
+                "awaiting_post_reboot_reading": self._gas_awaiting_post_reboot_reading,
+                "pre_reboot_target_drift": self._gas_pre_reboot_target_drift,
+                "auto_reboot_suspended": self._gas_auto_reboot_suspended,
+                "auto_reboot_suspend_reason": self._gas_auto_reboot_suspend_reason,
             }
         )
 
@@ -140,6 +207,53 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
     def _meters(data: dict) -> list:
         meters = data.get("UsageMeterList", [])
         return meters if isinstance(meters, list) else []
+
+    @property
+    def _gas_effective_reference_time(self) -> str:
+        return self._gas_cycle_reference_time or self._gas_target_time
+
+    async def _async_evaluate_post_reboot_reading(
+        self, detected_at: datetime
+    ) -> None:
+        """Learn the corrected cycle or suspend useless repeated reboots."""
+        if not self._gas_awaiting_post_reboot_reading:
+            return
+        if self._gas_last_reboot_at is None or detected_at <= self._gas_last_reboot_at:
+            return
+
+        self._gas_awaiting_post_reboot_reading = False
+        target_drift = abs(
+            circular_drift_minutes(detected_at, self._gas_target_time)
+        )
+        settle_limit = max(
+            self._gas_tolerance_minutes, _MIN_POST_REBOOT_SETTLE_MINUTES
+        )
+
+        if target_drift <= settle_limit:
+            self._gas_cycle_reference_time = clock_string(detected_at)
+            self._gas_reference_target_time = self._gas_target_time
+            self._gas_auto_reboot_suspended = False
+            self._gas_auto_reboot_suspend_reason = None
+            _LOGGER.info(
+                "Recalage gaz validé: nouvelle référence de cycle %s "
+                "(écart cible %d min)",
+                self._gas_cycle_reference_time,
+                target_drift,
+            )
+        else:
+            previous = self._gas_pre_reboot_target_drift
+            previous_text = f"{previous} min" if previous is not None else "inconnue"
+            self._gas_auto_reboot_suspended = True
+            self._gas_auto_reboot_suspend_reason = (
+                "reboot correctif sans recalage suffisant "
+                f"(dérive avant {previous_text}, après {target_drift} min)"
+            )
+            _LOGGER.warning(
+                "Reboots automatiques gaz suspendus: %s",
+                self._gas_auto_reboot_suspend_reason,
+            )
+
+        self._gas_pre_reboot_target_drift = None
 
     async def _async_observe_gas_reading(self, data: dict) -> None:
         """Remember when a new gas index is observed, without altering the value."""
@@ -167,6 +281,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         if detected:
             detected_at = dt_util.now()
             self._gas_last_detected_at = detected_at
+            await self._async_evaluate_post_reboot_reading(detected_at)
             _LOGGER.info(
                 "Nouvelle relève gaz détectée à %s, index=%s m³",
                 detected_at.isoformat(timespec="seconds"),
@@ -285,19 +400,47 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
 
     async def async_reboot(self, reason: str = "manuel", automatic: bool = False) -> None:
         """Reboot the MIP through the confirmed local /rs session API."""
-        await self.client.async_reboot()
+        if automatic:
+            # Save the state before sending the command so a Home Assistant reload
+            # immediately after the request cannot cause a second reboot.
+            now = dt_util.now()
+            self._gas_last_auto_reboot_date = now.date().isoformat()
+            self._gas_awaiting_post_reboot_reading = True
+            self._gas_pre_reboot_target_drift = (
+                abs(
+                    circular_drift_minutes(
+                        self._gas_last_detected_at, self._gas_target_time
+                    )
+                )
+                if self._gas_last_detected_at is not None
+                else None
+            )
+            await self._async_save_gas_state()
+
+        try:
+            await self.client.async_reboot()
+        except WiserLinkError:
+            if automatic:
+                self._gas_last_auto_reboot_date = None
+                self._gas_awaiting_post_reboot_reading = False
+                self._gas_pre_reboot_target_drift = None
+                await self._async_save_gas_state()
+            raise
+
         now = dt_util.now()
         self._gas_last_reboot_at = now
         self._gas_last_reboot_reason = reason
         self._reboot_grace_until = time.monotonic() + _REBOOT_GRACE_SECONDS
-        if automatic:
-            self._gas_last_auto_reboot_date = now.date().isoformat()
         await self._async_save_gas_state()
         _LOGGER.warning("Redémarrage Wiser MIP demandé: %s", reason)
 
     async def _async_maybe_correct_gas_drift(self) -> None:
-        """Reboot once in the evening when the latest real gas reading drifted."""
+        """Reboot once, early, only when a learned gas cycle is truly drifting."""
         if not self._gas_drift_control or self._gas_last_detected_at is None:
+            return
+        if self._gas_auto_reboot_suspended:
+            return
+        if self._gas_awaiting_post_reboot_reading:
             return
 
         now = dt_util.now()
@@ -305,8 +448,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             return
 
         # Never reboot repeatedly from the same old observation. After any reboot,
-        # wait for a new real MPE gas publication before another automatic reboot
-        # can be justified.
+        # a new real MPE gas publication is required before another correction.
         if (
             self._gas_last_reboot_at is not None
             and self._gas_last_detected_at <= self._gas_last_reboot_at
@@ -317,6 +459,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             now=now,
             last_detected=self._gas_last_detected_at,
             target_time=self._gas_target_time,
+            reference_time=self._gas_effective_reference_time,
             tolerance_minutes=self._gas_tolerance_minutes,
             control_time=self._gas_control_time,
         )
@@ -382,12 +525,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
     def gas_monitor_data(self) -> dict[str, Any]:
         """Return gas timing diagnostics for Home Assistant entities."""
         drift = self.gas_drift_minutes
-        waiting_for_new_reading = (
-            self._gas_last_reboot_at is not None
-            and (
-                self._gas_last_detected_at is None
-                or self._gas_last_detected_at <= self._gas_last_reboot_at
-            )
+        target_drift = (
+            circular_drift_minutes(self._gas_last_detected_at, self._gas_target_time)
+            if self._gas_last_detected_at is not None
+            else None
+        )
+        correction_window_valid = (
+            clock_minutes(self._gas_control_time)
+            < clock_minutes(self._gas_target_time)
         )
         return {
             "raw_value": (
@@ -398,14 +543,22 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             "last_detected_at": self._gas_last_detected_at,
             "next_estimated_at": next_estimated_reading(self._gas_last_detected_at),
             "drift_minutes": drift,
+            "target_drift_minutes": target_drift,
             "drift_exceeded": (
                 abs(drift) > self._gas_tolerance_minutes if drift is not None else None
             ),
             "target_time": self._gas_target_time,
+            "cycle_reference_time": self._gas_cycle_reference_time,
+            "effective_reference_time": self._gas_effective_reference_time,
             "tolerance_minutes": self._gas_tolerance_minutes,
             "control_time": self._gas_control_time,
+            "correction_window_valid": correction_window_valid,
             "automatic_control": self._gas_drift_control,
-            "waiting_for_new_reading_after_reboot": waiting_for_new_reading,
+            "waiting_for_new_reading_after_reboot": (
+                self._gas_awaiting_post_reboot_reading
+            ),
+            "auto_reboot_suspended": self._gas_auto_reboot_suspended,
+            "auto_reboot_suspend_reason": self._gas_auto_reboot_suspend_reason,
             "last_reboot_at": self._gas_last_reboot_at,
             "last_reboot_reason": self._gas_last_reboot_reason,
         }
@@ -415,5 +568,5 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         if self._gas_last_detected_at is None:
             return None
         return circular_drift_minutes(
-            self._gas_last_detected_at, self._gas_target_time
+            self._gas_last_detected_at, self._gas_effective_reference_time
         )
