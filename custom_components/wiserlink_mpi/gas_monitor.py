@@ -1,23 +1,10 @@
-"""Helpers for protecting and monitoring the daily MPR gas reading."""
+"""Helpers for monitoring the daily MPR gas reading drift."""
 
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
-from typing import Any
 
 _MINUTES_PER_DAY = 24 * 60
-
-
-def decimal_value(value: Any) -> Decimal | None:
-    """Return a finite Decimal or None."""
-    if value is None:
-        return None
-    try:
-        numeric = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-    return numeric if numeric.is_finite() else None
 
 
 def clock_minutes(value: str | time) -> int:
@@ -54,12 +41,13 @@ def should_correct_drift(
     tolerance_minutes: int,
     control_time: str | time,
 ) -> tuple[bool, str | None]:
-    """Decide whether a single pre-midnight corrective reboot is justified.
+    """Decide whether one corrective reboot is justified after control time.
 
-    A reboot is requested only after the configured control time and only when
-    there is actual evidence of drift: a reading detected today outside the
-    tolerance window, or no detected reading for more than 24h+tolerance.
-    With no learned reading time, no automatic reboot is requested.
+    The integration never invents a reading time. A reboot is requested only
+    after the configured control time and only when a previously detected gas
+    reading is outside the target tolerance, or has become older than 24 hours
+    plus the tolerance. The coordinator enforces a maximum of one automatic
+    reboot per local calendar day.
     """
     if now.hour * 60 + now.minute < clock_minutes(control_time):
         return False, None
@@ -81,16 +69,3 @@ def should_correct_drift(
     if age > timedelta(hours=24, minutes=tolerance_minutes):
         return True, f"aucune relève gaz détectée depuis {age.total_seconds() / 3600:.1f} h"
     return False, None
-
-
-def protected_cumulative_value(
-    raw_value: Decimal | None, last_valid_value: Decimal | None
-) -> tuple[Decimal | None, bool]:
-    """Protect a cumulative gas index from a transient reset or rollback."""
-    if raw_value is None:
-        return last_valid_value, last_valid_value is not None
-    if last_valid_value is None:
-        return raw_value, False
-    if raw_value < last_valid_value:
-        return last_valid_value, True
-    return raw_value, False
