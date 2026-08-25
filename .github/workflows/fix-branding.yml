@@ -1,0 +1,127 @@
+name: Fix WiserLink branding
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-branding.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix-branding:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pillow
+        run: python -m pip install --disable-pip-version-check pillow
+
+      - name: Rebuild transparent brand assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          import json
+
+          root = Path('.')
+          src_path = root / 'brand' / 'icon.png'
+          src = Image.open(src_path).convert('RGBA')
+          bbox = src.getchannel('A').getbbox()
+          if not bbox:
+              raise SystemExit('Source icon has no opaque pixels')
+          device = src.crop(bbox)
+
+          def fit(canvas_size: int, occupancy: float) -> Image.Image:
+              max_w = int(canvas_size * occupancy)
+              max_h = int(canvas_size * occupancy)
+              scale = min(max_w / device.width, max_h / device.height)
+              nw = max(1, round(device.width * scale))
+              nh = max(1, round(device.height * scale))
+              resized = device.resize((nw, nh), Image.Resampling.LANCZOS)
+              canvas = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
+              x = (canvas_size - nw) // 2
+              y = (canvas_size - nh) // 2
+              canvas.alpha_composite(resized, (x, y))
+              return canvas
+
+          assets = {
+              'icon.png': fit(256, 0.68),
+              'icon@2x.png': fit(512, 0.68),
+              'logo.png': fit(256, 0.78),
+              'logo@2x.png': fit(512, 0.78),
+          }
+
+          destinations = [
+              root / 'brand',
+              root / 'custom_components' / 'wiserlink_mpi' / 'brand',
+          ]
+
+          for dest in destinations:
+              dest.mkdir(parents=True, exist_ok=True)
+              for name, image in assets.items():
+                  image.save(dest / name, format='PNG', optimize=True)
+                  dark_name = f'dark_{name}'
+                  image.save(dest / dark_name, format='PNG', optimize=True)
+
+          # Strict validation: dimensions, RGBA transparency, and safe-area margins.
+          expected = {
+              'icon.png': 256,
+              'icon@2x.png': 512,
+              'logo.png': 256,
+              'logo@2x.png': 512,
+          }
+          for dest in destinations:
+              for base_name, size in expected.items():
+                  for name in (base_name, f'dark_{base_name}'):
+                      path = dest / name
+                      im = Image.open(path).convert('RGBA')
+                      if im.size != (size, size):
+                          raise SystemExit(f'Bad dimensions for {path}: {im.size}')
+                      alpha = im.getchannel('A')
+                      bbox = alpha.getbbox()
+                      if not bbox:
+                          raise SystemExit(f'No visible pixels in {path}')
+                      left, top, right, bottom = bbox
+                      margin = min(left, top, size-right, size-bottom)
+                      if margin < int(size * 0.08):
+                          raise SystemExit(f'Safe area too small for {path}: {margin}px')
+                      corners = [im.getpixel((0,0))[3], im.getpixel((size-1,0))[3], im.getpixel((0,size-1))[3], im.getpixel((size-1,size-1))[3]]
+                      if any(corners):
+                          raise SystemExit(f'Non-transparent corner in {path}')
+                      print(f'OK {path}: {im.size}, bbox={bbox}, margin>={margin}px')
+
+          manifest_path = root / 'custom_components' / 'wiserlink_mpi' / 'manifest.json'
+          manifest = json.loads(manifest_path.read_text())
+          manifest['version'] = '0.8.12'
+          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+
+      - name: Commit validated branding
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add brand custom_components/wiserlink_mpi/brand custom_components/wiserlink_mpi/manifest.json
+          git commit -m "WiserLink MPI 0.8.12: validated transparent branding"
+          git push origin main
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.8.12"
+          SHA="$(git rev-parse HEAD)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists"
+          else
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --notes "Validated WiserLink MPI branding: transparent EER39000 artwork, correct 256/512 px assets, and safe margins to prevent Home Assistant/HACS cropping."
+          fi
