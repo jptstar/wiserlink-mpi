@@ -15,12 +15,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import WiserLinkClient, WiserLinkError
 from .const import (
-    CONF_SCAN_INTERVAL,
     CONF_FAILURE_THRESHOLD,
+    CONF_SCAN_INTERVAL,
     DOMAIN,
     PLATFORMS,
     SERVICE_CONFIGURE_MPR,
     SERVICE_DELETE_MPR,
+    SERVICE_REBOOT_MIP,
     SERVICE_SEND_COMMAND,
 )
 from .coordinator import WiserLinkCoordinator
@@ -63,6 +64,8 @@ DELETE_MPR_SCHEMA = vol.Schema(
     }
 )
 
+REBOOT_MIP_SCHEMA = vol.Schema({vol.Required("entry_id"): cv.string})
+
 
 def _get_target_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry:
     """Resolve an explicitly selected WiserLink MPI configuration."""
@@ -87,13 +90,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
         client,
         settings[CONF_SCAN_INTERVAL],
         settings.get(CONF_FAILURE_THRESHOLD, 3),
+        entry.entry_id,
+        settings,
     )
+    await coordinator.async_initialize()
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_COMMAND):
+
         async def async_send_command(call: ServiceCall) -> dict[str, Any]:
             target = _get_target_entry(hass, call.data["entry_id"])
             try:
@@ -130,7 +137,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
             return {
                 "meter_id": result["Id"],
                 "meter_type": result["Type"],
-                "status": "configured",
+                "status": "unchanged" if result.get("_unchanged") else "configured",
             }
 
         hass.services.async_register(
@@ -159,6 +166,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
             schema=DELETE_MPR_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
+
+        async def async_reboot_mip(call: ServiceCall) -> dict[str, Any]:
+            target = _get_target_entry(hass, call.data["entry_id"])
+            try:
+                await target.runtime_data.async_reboot("service Home Assistant")
+            except WiserLinkError as err:
+                raise HomeAssistantError(str(err)) from err
+            return {"status": "reboot_requested"}
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REBOOT_MIP,
+            async_reboot_mip,
+            schema=REBOOT_MIP_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
     return True
 
 
@@ -177,4 +200,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) -
         hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
         hass.services.async_remove(DOMAIN, SERVICE_CONFIGURE_MPR)
         hass.services.async_remove(DOMAIN, SERVICE_DELETE_MPR)
+        hass.services.async_remove(DOMAIN, SERVICE_REBOOT_MIP)
     return unloaded
