@@ -41,8 +41,11 @@ J’ai initialement développé cette intégration par plaisir et pour ma propre
 - état EM5 et communications avec le MIP et le compteur électrique ;
 - numéros de série et versions logicielles MIP, EM5 et MPR ;
 - batterie et communication de chaque compteur MPR ;
-- dernier événement affiché directement, avec l’historique récent en attribut ;
-- configuration et suppression des compteurs impulsionnels MPR EER39300.
+- décodage des événements WiserLink selon la table officielle de l’interface Schneider ;
+- dernier événement affiché directement, avec l’historique récent et les codes bruts en attribut ;
+- configuration et suppression des compteurs impulsionnels MPR EER39300 ;
+- redémarrage explicite du EER31600 via la session Web locale ;
+- contrôle optionnel de dérive horaire des relèves gaz MPR/MPE avec heure cible, tolérance et heure de contrôle configurables.
 
 ## Correspondance des voies
 
@@ -78,7 +81,31 @@ Renseignez l’adresse IP du MPI, le port HTTP, le nom d’utilisateur, le mot d
 
 Les paramètres, l’état activé/désactivé et le nom de chaque voie détectée peuvent ensuite être modifiés dans **Paramètres → Appareils et services → WiserLink MPI → Configurer**.
 
+Pour le contrôle de dérive gaz, les options suivantes sont également disponibles dans **Configurer** :
+
+- **Contrôle automatique de dérive gaz** : désactivé par défaut ;
+- **Heure cible de relève gaz** : `23:45` par défaut ;
+- **Tolérance de dérive gaz** : `15 min` par défaut ;
+- **Heure de contrôle avant minuit** : `23:55` par défaut.
+
 Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe est prérempli avec `admin` et reste modifiable.
+
+## Contrôle de dérive des relèves gaz
+
+Le MPR/MPE peut publier son index suivant un cycle autonome qui dérive progressivement. L’intégration peut mémoriser l’heure à laquelle une nouvelle valeur gaz est réellement observée et comparer cette heure à une cible choisie dans la configuration.
+
+Le redémarrage automatique est volontairement conservateur afin d’éviter les redémarrages inutiles :
+
+1. aucun redémarrage n’est effectué tant que le contrôle automatique n’est pas activé ;
+2. la première relève observée sert seulement de référence ;
+3. au moins deux relèves réelles hors de la fenêtre configurée doivent être constatées avant une correction automatique ;
+4. un seul redémarrage automatique peut être demandé dans une même journée ;
+5. après un redémarrage correctif, aucune nouvelle correction n’est autorisée tant qu’une nouvelle relève gaz n’a pas été observée ;
+6. si la relève suivante n’est pas améliorée d’au moins 5 minutes, les redémarrages automatiques sont suspendus pour éviter une boucle inutile.
+
+L’intégration ne modifie pas artificiellement l’index gaz pour cette fonction : elle observe la valeur réellement fournie par le WiserLink et utilise uniquement l’heure de changement pour mesurer la dérive.
+
+Une entité de diagnostic **Dérive relève gaz** expose notamment l’heure de la dernière relève détectée, l’estimation de la suivante, la dérive en minutes, les horaires configurés et l’état des sécurités anti-reboot.
 
 ## Protection des mesures et statistiques
 
@@ -111,6 +138,10 @@ Conservez vos anciens capteurs MQTT utilisés par le tableau Énergie tant que l
 ## Écriture
 
 Les actions `wiserlink_mpi.configure_mpr` et `wiserlink_mpi.delete_mpr` permettent d’ajouter, modifier ou supprimer un compteur MPR depuis Home Assistant. Le formulaire comprend le type de compteur, l’usage RT2012, le poids et l’unité d’impulsion ainsi que l’adresse radio.
+
+Une configuration MPR strictement identique à celle déjà présente n’est plus réécrite : le matériel a montré qu’un simple `PUT` identique pouvait lancer une vraie procédure radio et finir en échec.
+
+L’action `wiserlink_mpi.reboot_mip` redémarre explicitement le EER31600 via la route `/rs/Device/methods/Reboot` et la session Web locale.
 
 L’action `wiserlink_mpi.send_command` permet d’envoyer une requête `POST`, `PUT` ou `PATCH` à un endpoint local `/vesta/`.
 
