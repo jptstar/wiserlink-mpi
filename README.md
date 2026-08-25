@@ -92,20 +92,22 @@ Les identifiants initiaux du EER31600 sont `admin` / `admin`. Le mot de passe es
 
 ## Contrôle de dérive des relèves gaz
 
-Le MPR/MPE peut publier son index suivant un cycle autonome qui dérive progressivement. L’intégration peut mémoriser l’heure à laquelle une nouvelle valeur gaz est réellement observée et comparer cette heure à une cible choisie dans la configuration.
+Le MPR/MPE peut publier son index suivant un cycle autonome qui dérive progressivement. L’intégration mémorise l’heure à laquelle une nouvelle valeur gaz est réellement observée et compare cette heure à la cible choisie dans la configuration.
 
-Le redémarrage automatique est volontairement conservateur afin d’éviter les redémarrages inutiles :
+La logique est volontairement simple :
 
 1. aucun redémarrage n’est effectué tant que le contrôle automatique n’est pas activé ;
-2. la première relève observée sert seulement de référence ;
-3. au moins deux relèves réelles hors de la fenêtre configurée doivent être constatées avant une correction automatique ;
-4. un seul redémarrage automatique peut être demandé dans une même journée ;
-5. après un redémarrage correctif, aucune nouvelle correction n’est autorisée tant qu’une nouvelle relève gaz n’a pas été observée ;
-6. si la relève suivante n’est pas améliorée d’au moins 5 minutes, les redémarrages automatiques sont suspendus pour éviter une boucle inutile.
+2. dès qu’une vraie relève gaz est détectée hors de la fenêtre `heure cible ± tolérance`, la dérive est mémorisée ;
+3. à l’heure de contrôle configurée, cette seule dérive suffit pour demander un redémarrage correctif du EER31600 ;
+4. si la dernière relève est dans la fenêtre autorisée, aucun redémarrage n’est effectué ;
+5. un seul redémarrage automatique peut être demandé dans une même journée ;
+6. après un redémarrage, l’intégration attend obligatoirement une nouvelle vraie relève avant d’autoriser un autre redémarrage automatique. Une ancienne dérive ne peut donc pas provoquer une boucle de reboots.
+
+Exemple avec une cible à `23:45`, une tolérance de `15 min` et un contrôle à `23:55` : une relève à `16:00` est hors fenêtre, donc le MIP redémarre à `23:55`. Une relève à `23:40` est dans la fenêtre `23:30–00:00`, donc aucun reboot n’est effectué. Si un reboot a déjà eu lieu, aucun second reboot n’est autorisé tant qu’une nouvelle relève réelle n’a pas été observée.
 
 L’intégration ne modifie pas artificiellement l’index gaz pour cette fonction : elle observe la valeur réellement fournie par le WiserLink et utilise uniquement l’heure de changement pour mesurer la dérive.
 
-Une entité de diagnostic **Dérive relève gaz** expose notamment l’heure de la dernière relève détectée, l’estimation de la suivante, la dérive en minutes, les horaires configurés et l’état des sécurités anti-reboot.
+Une entité de diagnostic **Dérive relève gaz** expose notamment l’heure de la dernière relève détectée, l’estimation de la suivante, la dérive en minutes, les horaires configurés, le dernier redémarrage et l’indication d’attente d’une nouvelle relève après reboot.
 
 ## Protection des mesures et statistiques
 
