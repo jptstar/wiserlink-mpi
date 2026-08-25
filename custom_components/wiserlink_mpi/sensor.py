@@ -94,6 +94,69 @@ _MPR_USAGE_NAMES = {
     "Others": "Autres",
 }
 
+# Official mappings extracted from the Schneider WiserLink Web UI bundled with
+# eSetup for Electrician. Each pair is (state 0, state 1).
+_EVENT_SOURCE0 = {
+    0: ("Fin erreur TIC", "Erreur TIC"),
+    1: ("Fin erreur EM5 - mesure", "Erreur EM5 - mesure"),
+    2: (
+        "Fin erreur extension EM5 - court-circuit",
+        "Erreur extension EM5 - court-circuit",
+    ),
+    3: ("Fin erreur EM5 - mémoire Flash", "Erreur EM5 - mémoire Flash"),
+    4: (
+        "Toutes les extensions détectées sont maintenant supportées",
+        "Extension non supportée",
+    ),
+    5: ("Fin erreur bus extensions EM5", "Erreur bus extensions EM5"),
+    7: ("Fin erreur appareil EM5", "Erreur appareil EM5"),
+    9: ("Compteur principal détecté de nouveau", "Compteur principal non détecté"),
+}
+
+_EVENT_EXTENSION = {
+    0: ("Fin erreur intégrité", "Erreur intégrité"),
+    1: ("Fin erreur mémoire Flash", "Erreur mémoire Flash"),
+    4: ("Fin erreur matérielle", "Erreur matérielle"),
+    8: ("Fin défaut extension OUREA", "Défaut extension OUREA"),
+}
+
+_EVENT_MPR = {
+    0: ("Versions MPE/MPR compatibles", "Incompatibilité de versions MPE/MPR"),
+    1: ("Batterie MPE correcte", "Batterie MPE faible"),
+    2: ("Communication MPE/MPR rétablie", "Erreur de communication MPE/MPR"),
+    3: ("Qualité MPE/MPR bonne", "Qualité MPE/MPR moyenne"),
+    4: ("Qualité MPE/MPR moyenne", "Qualité MPE/MPR mauvaise"),
+}
+
+_EVENT_SOURCE15_CLASS100 = {
+    0: ("Communication EM5 rétablie", "Communication EM5 perdue"),
+    1: ("EM5 détecté de nouveau", "EM5 non détecté"),
+    2: ("Connexion cloud rétablie", "Connexion cloud perdue"),
+}
+
+_EVENT_SOURCE15_CLASS101 = {
+    0: ("Wiser MIP redémarré", "Wiser MIP redémarré"),
+    1: ("Le Wiser MIP utilise maintenant l’IP de secours", "Le Wiser MIP utilise maintenant l’IP de secours"),
+    2: ("Le Wiser MIP utilise maintenant l’adresse IP", "Le Wiser MIP utilise maintenant l’adresse IP"),
+    3: ("Session web locale terminée", "Session web locale démarrée"),
+    4: ("Bouton du Wiser MIP relâché", "Bouton du Wiser MIP appuyé"),
+    5: ("Historique réinitialisé après corruption mémoire", "Historique réinitialisé après corruption mémoire"),
+    6: ("Débordement de l’historique", "Débordement de l’historique"),
+    7: ("Journal des événements réinitialisé après corruption mémoire", "Journal des événements réinitialisé après corruption mémoire"),
+    8: ("Débordement du journal des événements", "Débordement du journal des événements"),
+    9: ("Système à jour", "Incohérence système détectée - mise à niveau requise"),
+    10: ("Mise à niveau système terminée", "Mise à niveau système terminée"),
+}
+
+_EVENT_SOURCE15_CLASS102 = {
+    0: "Réinitialisation historique de mesure - Chauffage",
+    1: "Réinitialisation historique de mesure - Eau chaude",
+    2: "Réinitialisation historique de mesure - Climatisation",
+    3: "Réinitialisation historique de mesure - LoadSem",
+    5: "Réinitialisation énergie",
+    6: "Mise à jour de la référence d’index énergie pour l’usage",
+}
+
 
 def _entry_prefix(entry: ConfigEntry) -> str:
     return entry.unique_id or entry.entry_id
@@ -119,7 +182,6 @@ def _metrics_for_meter(
     metrics: list[Metric] = []
     unit = meter_effective_unit(settings, index, meter)
 
-    # A channel treated as a volume must never expose an electrical power sensor.
     if unit != METER_UNIT_M3 and "Power" in meter and normalized_power_unit(meter) == "w":
         metrics.append(POWER_METRIC)
 
@@ -247,8 +309,6 @@ async def _migrate_energy_dashboard_gas_source(
         if entity_id is not None:
             gas_entity_ids.append(entity_id)
 
-    # Only migrate when the destination is unambiguous. This preserves the user's
-    # current WiserLink entity_id and therefore its existing long-term statistics.
     if len(gas_entity_ids) != 1:
         return
 
@@ -282,7 +342,6 @@ def _mpr_extension_value(data: dict, field: str) -> str | None:
 
 
 def _mpr_type_name(value: Any) -> str | None:
-    """Translate an MPR meter type for display while preserving unknown values."""
     if value is None:
         return None
     text = str(value)
@@ -290,7 +349,6 @@ def _mpr_type_name(value: Any) -> str | None:
 
 
 def _mpr_usage_name(value: Any) -> str | None:
-    """Translate an MPR RT2012 usage for diagnostics."""
     if value is None:
         return None
     text = str(value)
@@ -344,6 +402,10 @@ class WiserLinkEventsSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntit
                     "Id": event.get("Id", index),
                     "Date&Heure": _format_event_time(event.get("Timestamp")),
                     "Description": _event_description(event),
+                    "Source": event.get("Source"),
+                    "Code": event.get("Code"),
+                    "Classe": event.get("Class"),
+                    "Etat": event.get("State"),
                 }
                 for index, event in enumerate(recent, 1)
             ],
@@ -402,29 +464,73 @@ def _format_event_time(timestamp: str | None) -> str:
     return dt_util.as_local(parsed).strftime("%d/%m/%Y, %H:%M:%S")
 
 
+def _event_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _event_pair(pair: tuple[str, str], state: int | None) -> str:
+    return pair[1] if state == 1 else pair[0]
+
+
+def _with_suffix(text: str, suffix: Any) -> str:
+    extra = str(suffix).strip() if suffix not in (None, "") else ""
+    return f"{text} : {extra}" if extra else text
+
+
 def _event_description(event: dict) -> str:
-    source = event.get("Source")
-    event_class = event.get("Class")
-    code = event.get("Code")
-    state = event.get("State")
-    additional = event.get("AdditionalData") or ""
-    if (source, event_class, code) == (15, 101, 3):
-        return (
-            "Une session web locale a été démarrée"
-            if state == 1
-            else "La session web locale a été arrêtée"
-        )
-    if (source, event_class, code) == (15, 101, 2):
-        return f"Le Wiser MIP utilise maintenant l’adresse IP : {additional}".strip()
-    if source == 0 and code == 9:
-        return (
-            "Compteur principal non détecté"
-            if state == 1
-            else "Compteur principal détecté de nouveau"
-        )
-    if event_type := event.get("Type"):
-        return f"{event_type} {additional}".strip()
-    return f"Événement source {source}, code {code}, état {state}"
+    source = _event_int(event.get("Source"))
+    event_class = _event_int(event.get("Class"))
+    code = _event_int(event.get("Code"))
+    state = _event_int(event.get("State"))
+    additional = event.get("AdditionalData")
+    event_type = event.get("Type")
+
+    if source == 0 and code in _EVENT_SOURCE0:
+        return _event_pair(_EVENT_SOURCE0[code], state)
+
+    if source is not None and 1 <= source <= 4 and code in _EVENT_EXTENSION:
+        return f"Extension EM5 #{source} - {_event_pair(_EVENT_EXTENSION[code], state)}"
+
+    if source is not None and 5 <= source <= 8 and code in _EVENT_MPR:
+        return _with_suffix(_event_pair(_EVENT_MPR[code], state), event_type or additional)
+
+    if source is not None and 9 <= source <= 14 and code == 0:
+        offset = source - 9
+        m2i = offset // 2 + 1
+        input_no = offset % 2 + 1
+        if state == 1:
+            return _with_suffix(
+                f"Alarme détectée sur M2I #{m2i}, entrée {input_no}",
+                additional or event_type,
+            )
+        return f"Alarme terminée sur M2I #{m2i}, entrée {input_no}"
+
+    if source == 15:
+        if event_class == 100 and code in _EVENT_SOURCE15_CLASS100:
+            return _event_pair(_EVENT_SOURCE15_CLASS100[code], state)
+
+        if event_class == 101 and code in _EVENT_SOURCE15_CLASS101:
+            description = _event_pair(_EVENT_SOURCE15_CLASS101[code], state)
+            if code in {1, 2, 10}:
+                return _with_suffix(description, additional)
+            return description
+
+        if event_class == 102 and code in _EVENT_SOURCE15_CLASS102:
+            description = _EVENT_SOURCE15_CLASS102[code]
+            if code in {3, 5, 6}:
+                return _with_suffix(description, additional)
+            return description
+
+    if event_type:
+        return _with_suffix(str(event_type), additional)
+
+    return (
+        f"Événement source {source}, classe {event_class}, "
+        f"code {code}, état {state}"
+    )
 
 
 def _remove_obsolete_volume_power_entities(
