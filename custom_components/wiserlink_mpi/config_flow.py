@@ -14,11 +14,19 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import WiserLinkAuthError, WiserLinkClient, WiserLinkError
 from .const import (
     CONF_FAILURE_THRESHOLD,
+    CONF_GAS_CONTROL_TIME,
+    CONF_GAS_DRIFT_CONTROL,
+    CONF_GAS_TARGET_TIME,
+    CONF_GAS_TOLERANCE_MINUTES,
     CONF_LOAD_NAME_PREFIX,
     CONF_METER_ENABLED_PREFIX,
     CONF_METER_UNIT_PREFIX,
     CONF_SCAN_INTERVAL,
     DEFAULT_FAILURE_THRESHOLD,
+    DEFAULT_GAS_CONTROL_TIME,
+    DEFAULT_GAS_DRIFT_CONTROL,
+    DEFAULT_GAS_TARGET_TIME,
+    DEFAULT_GAS_TOLERANCE_MINUTES,
     DEFAULT_PASSWORD,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
@@ -116,7 +124,7 @@ class WiserLinkOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate and save connection, enabled meters, names and units."""
+        """Validate and save connection, meters and gas drift protection."""
         current = {**self._entry.data, **self._entry.options}
         coordinator = self._entry.runtime_data
         meters = (
@@ -169,6 +177,34 @@ class WiserLinkOptionsFlow(OptionsFlow):
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
+            vol.Required(
+                CONF_GAS_DRIFT_CONTROL,
+                default=current.get(
+                    CONF_GAS_DRIFT_CONTROL, DEFAULT_GAS_DRIFT_CONTROL
+                ),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_GAS_TARGET_TIME,
+                default=current.get(CONF_GAS_TARGET_TIME, DEFAULT_GAS_TARGET_TIME),
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_GAS_TOLERANCE_MINUTES,
+                default=current.get(
+                    CONF_GAS_TOLERANCE_MINUTES, DEFAULT_GAS_TOLERANCE_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=120,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+            vol.Required(
+                CONF_GAS_CONTROL_TIME,
+                default=current.get(CONF_GAS_CONTROL_TIME, DEFAULT_GAS_CONTROL_TIME),
+            ): selector.TimeSelector(),
         }
 
         for index, meter in enumerate(meters):
