@@ -34,47 +34,85 @@ class GasMonitorTests(unittest.TestCase):
 
     def test_no_reboot_before_control_time(self) -> None:
         should_reboot, reason = gas_monitor.should_correct_drift(
-            now=datetime(2026, 8, 25, 23, 40),
+            now=datetime(2026, 8, 25, 23, 34),
             last_detected=datetime(2026, 8, 25, 16, 0),
             target_time="23:45:00",
-            tolerance_minutes=15,
-            control_time="23:55:00",
+            tolerance_minutes=10,
+            control_time="23:35:00",
         )
         self.assertFalse(should_reboot)
         self.assertIsNone(reason)
 
-    def test_reboot_after_control_time_when_reading_drifted(self) -> None:
+    def test_reboot_at_early_control_time_when_cycle_is_drifted(self) -> None:
         should_reboot, reason = gas_monitor.should_correct_drift(
-            now=datetime(2026, 8, 25, 23, 55),
-            last_detected=datetime(2026, 8, 25, 16, 0),
+            now=datetime(2026, 8, 25, 23, 35),
+            last_detected=datetime(2026, 8, 24, 16, 0),
             target_time="23:45:00",
-            tolerance_minutes=15,
-            control_time="23:55:00",
+            tolerance_minutes=10,
+            control_time="23:35:00",
         )
         self.assertTrue(should_reboot)
         self.assertIn("dérive", reason)
 
-    def test_no_reboot_when_reading_is_inside_window(self) -> None:
+    def test_previous_2347_reading_does_not_reboot_at_2335(self) -> None:
+        """Absence of today's still-not-due reading must not cause a reboot."""
         should_reboot, reason = gas_monitor.should_correct_drift(
-            now=datetime(2026, 8, 25, 23, 55),
-            last_detected=datetime(2026, 8, 25, 23, 40),
+            now=datetime(2026, 8, 25, 23, 35),
+            last_detected=datetime(2026, 8, 24, 23, 47),
             target_time="23:45:00",
-            tolerance_minutes=15,
-            control_time="23:55:00",
+            tolerance_minutes=10,
+            control_time="23:35:00",
         )
         self.assertFalse(should_reboot)
         self.assertIsNone(reason)
 
-    def test_old_reading_can_request_correction(self) -> None:
+    def test_no_late_reboot_at_or_after_target(self) -> None:
+        for minute in (45, 46, 55):
+            with self.subTest(minute=minute):
+                should_reboot, reason = gas_monitor.should_correct_drift(
+                    now=datetime(2026, 8, 25, 23, minute),
+                    last_detected=datetime(2026, 8, 25, 16, 0),
+                    target_time="23:45:00",
+                    tolerance_minutes=10,
+                    control_time="23:35:00",
+                )
+                self.assertFalse(should_reboot)
+                self.assertIsNone(reason)
+
+    def test_learned_2347_cycle_is_used_as_reference(self) -> None:
         should_reboot, reason = gas_monitor.should_correct_drift(
-            now=datetime(2026, 8, 25, 23, 55),
-            last_detected=datetime(2026, 8, 24, 23, 20),
+            now=datetime(2026, 8, 25, 23, 35),
+            last_detected=datetime(2026, 8, 24, 23, 56),
             target_time="23:45:00",
-            tolerance_minutes=15,
-            control_time="23:55:00",
+            reference_time="23:47:00",
+            tolerance_minutes=10,
+            control_time="23:35:00",
+        )
+        self.assertFalse(should_reboot)
+        self.assertIsNone(reason)
+
+    def test_learned_cycle_reboots_only_after_true_reference_drift(self) -> None:
+        should_reboot, reason = gas_monitor.should_correct_drift(
+            now=datetime(2026, 8, 25, 23, 35),
+            last_detected=datetime(2026, 8, 24, 23, 58),
+            target_time="23:45:00",
+            reference_time="23:47:00",
+            tolerance_minutes=10,
+            control_time="23:35:00",
         )
         self.assertTrue(should_reboot)
-        self.assertIn("aucune relève", reason)
+        self.assertIn("référence 23:47:00", reason)
+
+    def test_invalid_late_control_time_disables_automatic_reboot(self) -> None:
+        should_reboot, reason = gas_monitor.should_correct_drift(
+            now=datetime(2026, 8, 25, 23, 55),
+            last_detected=datetime(2026, 8, 25, 16, 0),
+            target_time="23:45:00",
+            tolerance_minutes=10,
+            control_time="23:55:00",
+        )
+        self.assertFalse(should_reboot)
+        self.assertIsNone(reason)
 
 
 if __name__ == "__main__":
