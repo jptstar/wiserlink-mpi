@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import logging
 import time
 from typing import Any
@@ -28,9 +28,7 @@ from .const import (
 )
 from .gas_monitor import (
     circular_drift_minutes,
-    decimal_value,
     next_estimated_reading,
-    protected_cumulative_value,
     should_correct_drift,
 )
 from .meter import is_gas_meter
@@ -84,40 +82,40 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_store: Store[dict[str, Any]] = Store(
             hass, _STORAGE_VERSION, f"{DOMAIN}.{entry_id}.gas_monitor"
         )
-        self._gas_last_valid_value: Decimal | None = None
         self._gas_last_raw_value: Decimal | None = None
         self._gas_last_detected_at: datetime | None = None
         self._gas_last_reboot_at: datetime | None = None
         self._gas_last_reboot_reason: str | None = None
         self._gas_last_auto_reboot_date: str | None = None
-        self._gas_cache_protected = False
-        self._gas_raw_value: Decimal | None = None
 
     async def async_initialize(self) -> None:
-        """Load persistent gas protection and drift history before first polling."""
+        """Load persistent gas drift history before first polling."""
         saved = await self._gas_store.async_load() or {}
-        self._gas_last_valid_value = decimal_value(saved.get("last_valid_value"))
-        self._gas_last_raw_value = decimal_value(saved.get("last_raw_value"))
+        self._gas_last_raw_value = self._decimal(saved.get("last_raw_value"))
         self._gas_last_detected_at = self._parse_datetime(saved.get("last_detected_at"))
         self._gas_last_reboot_at = self._parse_datetime(saved.get("last_reboot_at"))
         self._gas_last_reboot_reason = saved.get("last_reboot_reason")
         self._gas_last_auto_reboot_date = saved.get("last_auto_reboot_date")
 
     @staticmethod
+    def _decimal(value: Any) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            numeric = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return numeric if numeric.is_finite() else None
+
+    @staticmethod
     def _parse_datetime(value: Any) -> datetime | None:
         if not value:
             return None
-        parsed = dt_util.parse_datetime(str(value))
-        return parsed
+        return dt_util.parse_datetime(str(value))
 
     async def _async_save_gas_state(self) -> None:
         await self._gas_store.async_save(
             {
-                "last_valid_value": (
-                    str(self._gas_last_valid_value)
-                    if self._gas_last_valid_value is not None
-                    else None
-                ),
                 "last_raw_value": (
                     str(self._gas_last_raw_value)
                     if self._gas_last_raw_value is not None
@@ -143,74 +141,44 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         meters = data.get("UsageMeterList", [])
         return meters if isinstance(meters, list) else []
 
-    async def _async_apply_gas_guard(self, data: dict) -> None:
-        """Keep a known cumulative gas index across MIP cache resets."""
-        meters = self._meters(data)
+    async def _async_observe_gas_reading(self, data: dict) -> None:
+        """Remember when a new gas index is actually observed, without altering it."""
         gas_meter = next(
-            (meter for meter in meters if isinstance(meter, dict) and is_gas_meter(meter)),
+            (
+                meter
+                for meter in self._meters(data)
+                if isinstance(meter, dict) and is_gas_meter(meter)
+            ),
             None,
         )
         if gas_meter is None:
             return
 
-        raw = decimal_value(gas_meter.get("EnergyConsumed"))
-        previous_raw = self._gas_last_raw_value
-        previous_valid = self._gas_last_valid_value
-        now = dt_util.utcnow()
-        changed = raw != previous_raw
-        detected = False
+        raw = self._decimal(gas_meter.get("EnergyConsumed"))
+        if raw is None:
+            return
 
-        if raw is not None and raw >= 0:
-            if previous_valid is None:
-                if raw > 0:
-                    self._gas_last_valid_value = raw
-                    detected = previous_raw is not None and previous_raw <= 0
-            elif raw > previous_valid:
-                self._gas_last_valid_value = raw
-                detected = True
-            elif (
-                raw >= previous_valid
-                and previous_raw is not None
-                and previous_raw < previous_valid
-            ):
-                # A reboot commonly clears the MIP gas cache to 0. Seeing the
-                # protected index again is a detectable fresh MPR/MPE recovery,
-                # even when there was no gas consumption in between.
-                detected = True
-
-        protected, is_protected = protected_cumulative_value(
-            raw, self._gas_last_valid_value
-        )
-        self._gas_cache_protected = is_protected
-        self._gas_raw_value = raw
+        previous = self._gas_last_raw_value
         self._gas_last_raw_value = raw
 
-        if is_protected and protected is not None:
-            gas_meter["EnergyConsumed"] = float(protected)
-            _LOGGER.warning(
-                "Index gaz brut %s m³ inférieur au dernier index valide %s m³; "
-                "dernière valeur valide conservée",
-                raw,
-                protected,
-            )
-
+        # The first value after installing this version establishes a baseline
+        # only. A later positive change, including 0 -> the previous real index
+        # after a reboot, is considered a newly observed MPE/MPR publication.
+        detected = previous is not None and raw > 0 and raw != previous
         if detected:
-            self._gas_last_detected_at = now
+            self._gas_last_detected_at = dt_util.now()
             _LOGGER.info(
                 "Nouvelle relève gaz détectée à %s, index=%s m³",
-                dt_util.as_local(now).isoformat(timespec="seconds"),
-                self._gas_last_valid_value,
+                self._gas_last_detected_at.isoformat(timespec="seconds"),
+                raw,
             )
-            changed = True
 
-        if self._gas_last_valid_value != previous_valid:
-            changed = True
-        if changed:
+        if previous != raw or detected:
             await self._async_save_gas_state()
 
     async def _async_read_usage_once(self) -> tuple[dict, float]:
         data = await self.client.async_get_usage_meters()
-        await self._async_apply_gas_guard(data)
+        await self._async_observe_gas_reading(data)
         return data, time.monotonic()
 
     async def _async_read_usage_with_retry(self) -> tuple[dict, float]:
@@ -239,9 +207,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         second, second_at = await self._async_read_usage_with_retry()
 
         first_second = snapshot_anomalies(
-            self._meters(first),
-            self._meters(second),
-            second_at - first_at,
+            self._meters(first), self._meters(second), second_at - first_at
         )
         if not first_second:
             return second, second_at
@@ -255,9 +221,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         third, third_at = await self._async_read_usage_with_retry()
 
         second_third = snapshot_anomalies(
-            self._meters(second),
-            self._meters(third),
-            third_at - second_at,
+            self._meters(second), self._meters(third), third_at - second_at
         )
         if not second_third:
             return third, third_at
@@ -320,14 +284,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         )
 
     async def async_reboot(self, reason: str = "manuel", automatic: bool = False) -> None:
-        """Reboot the MIP and preserve gas data during the expected outage."""
+        """Reboot the MIP through the confirmed local /rs session API."""
         await self.client.async_reboot()
-        now = dt_util.utcnow()
+        now = dt_util.now()
         self._gas_last_reboot_at = now
         self._gas_last_reboot_reason = reason
         self._reboot_grace_until = time.monotonic() + _REBOOT_GRACE_SECONDS
         if automatic:
-            self._gas_last_auto_reboot_date = dt_util.as_local(now).date().isoformat()
+            self._gas_last_auto_reboot_date = now.date().isoformat()
         await self._async_save_gas_state()
         _LOGGER.warning("Redémarrage Wiser MIP demandé: %s", reason)
 
@@ -339,10 +303,9 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         if self._gas_last_auto_reboot_date == now.date().isoformat():
             return
 
-        last_local = dt_util.as_local(self._gas_last_detected_at)
         should_reboot, reason = should_correct_drift(
             now=now,
-            last_detected=last_local,
+            last_detected=self._gas_last_detected_at,
             target_time=self._gas_target_time,
             tolerance_minutes=self._gas_tolerance_minutes,
             control_time=self._gas_control_time,
@@ -376,17 +339,13 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._last_usage_monotonic = usage_at
 
         try:
-            data["_sem_identification"] = (
-                await self.client.async_get_sem_identification()
-            )
+            data["_sem_identification"] = await self.client.async_get_sem_identification()
         except WiserLinkError as err:
             _LOGGER.warning("Lecture des statuts EM5 impossible: %s", err)
             if self.data is not None and "_sem_identification" in self.data:
                 data["_sem_identification"] = self.data["_sem_identification"]
         try:
-            data["_mip_identification"] = (
-                await self.client.async_get_mip_identification()
-            )
+            data["_mip_identification"] = await self.client.async_get_mip_identification()
         except WiserLinkError as err:
             _LOGGER.warning("Lecture de l’identification MIP impossible: %s", err)
             if self.data is not None and "_mip_identification" in self.data:
@@ -411,18 +370,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
 
     @property
     def gas_monitor_data(self) -> dict[str, Any]:
-        """Return diagnostics used by the gas drift entity."""
+        """Return gas timing diagnostics for Home Assistant entities."""
         drift = self.gas_drift_minutes
         return {
-            "last_valid_value": (
-                float(self._gas_last_valid_value)
-                if self._gas_last_valid_value is not None
+            "raw_value": (
+                float(self._gas_last_raw_value)
+                if self._gas_last_raw_value is not None
                 else None
             ),
-            "raw_value": (
-                float(self._gas_raw_value) if self._gas_raw_value is not None else None
-            ),
-            "cache_protected": self._gas_cache_protected,
             "last_detected_at": self._gas_last_detected_at,
             "next_estimated_at": next_estimated_reading(self._gas_last_detected_at),
             "drift_minutes": drift,
@@ -442,5 +397,5 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         if self._gas_last_detected_at is None:
             return None
         return circular_drift_minutes(
-            dt_util.as_local(self._gas_last_detected_at), self._gas_target_time
+            self._gas_last_detected_at, self._gas_target_time
         )
