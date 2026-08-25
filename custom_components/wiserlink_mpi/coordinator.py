@@ -38,6 +38,8 @@ _LOGGER = logging.getLogger(__name__)
 _CONFIRM_DELAY_SECONDS = 1.0
 _REBOOT_GRACE_SECONDS = 90.0
 _STORAGE_VERSION = 1
+_MIN_AUTOMATIC_REBOOT_SAMPLES = 2
+_MIN_REBOOT_IMPROVEMENT_MINUTES = 5
 
 
 class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
@@ -84,18 +86,37 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         )
         self._gas_last_raw_value: Decimal | None = None
         self._gas_last_detected_at: datetime | None = None
+        self._gas_detection_history: list[datetime] = []
         self._gas_last_reboot_at: datetime | None = None
         self._gas_last_reboot_reason: str | None = None
         self._gas_last_auto_reboot_date: str | None = None
+        self._gas_awaiting_post_reboot_reading = False
+        self._gas_pre_reboot_abs_drift: int | None = None
+        self._gas_auto_reboot_suspended = False
+        self._gas_auto_reboot_suspend_reason: str | None = None
 
     async def async_initialize(self) -> None:
         """Load persistent gas drift history before first polling."""
         saved = await self._gas_store.async_load() or {}
         self._gas_last_raw_value = self._decimal(saved.get("last_raw_value"))
         self._gas_last_detected_at = self._parse_datetime(saved.get("last_detected_at"))
+        self._gas_detection_history = [
+            parsed
+            for value in saved.get("detection_history", [])
+            if (parsed := self._parse_datetime(value)) is not None
+        ][-3:]
         self._gas_last_reboot_at = self._parse_datetime(saved.get("last_reboot_at"))
         self._gas_last_reboot_reason = saved.get("last_reboot_reason")
         self._gas_last_auto_reboot_date = saved.get("last_auto_reboot_date")
+        self._gas_awaiting_post_reboot_reading = bool(
+            saved.get("awaiting_post_reboot_reading", False)
+        )
+        pre_drift = saved.get("pre_reboot_abs_drift")
+        self._gas_pre_reboot_abs_drift = int(pre_drift) if pre_drift is not None else None
+        self._gas_auto_reboot_suspended = bool(
+            saved.get("auto_reboot_suspended", False)
+        )
+        self._gas_auto_reboot_suspend_reason = saved.get("auto_reboot_suspend_reason")
 
     @staticmethod
     def _decimal(value: Any) -> Decimal | None:
@@ -126,6 +147,9 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
                     if self._gas_last_detected_at
                     else None
                 ),
+                "detection_history": [
+                    item.isoformat() for item in self._gas_detection_history[-3:]
+                ],
                 "last_reboot_at": (
                     self._gas_last_reboot_at.isoformat()
                     if self._gas_last_reboot_at
@@ -133,6 +157,10 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
                 ),
                 "last_reboot_reason": self._gas_last_reboot_reason,
                 "last_auto_reboot_date": self._gas_last_auto_reboot_date,
+                "awaiting_post_reboot_reading": self._gas_awaiting_post_reboot_reading,
+                "pre_reboot_abs_drift": self._gas_pre_reboot_abs_drift,
+                "auto_reboot_suspended": self._gas_auto_reboot_suspended,
+                "auto_reboot_suspend_reason": self._gas_auto_reboot_suspend_reason,
             }
         )
 
@@ -141,8 +169,62 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         meters = data.get("UsageMeterList", [])
         return meters if isinstance(meters, list) else []
 
+    def _two_recent_readings_confirm_drift(self) -> bool:
+        """Require two independent off-target readings before automatic reboot."""
+        if len(self._gas_detection_history) < _MIN_AUTOMATIC_REBOOT_SAMPLES:
+            return False
+        recent = self._gas_detection_history[-_MIN_AUTOMATIC_REBOOT_SAMPLES:]
+        return all(
+            abs(circular_drift_minutes(item, self._gas_target_time))
+            > self._gas_tolerance_minutes
+            for item in recent
+        )
+
+    async def _async_evaluate_reboot_effectiveness(self, detected_at: datetime) -> None:
+        """Suspend automatic rebooting when the previous reboot did not help."""
+        if not self._gas_awaiting_post_reboot_reading:
+            return
+
+        new_abs_drift = abs(circular_drift_minutes(detected_at, self._gas_target_time))
+        old_abs_drift = self._gas_pre_reboot_abs_drift
+        self._gas_awaiting_post_reboot_reading = False
+        self._gas_pre_reboot_abs_drift = None
+
+        if old_abs_drift is None:
+            return
+
+        improvement = old_abs_drift - new_abs_drift
+        if new_abs_drift <= self._gas_tolerance_minutes:
+            self._gas_auto_reboot_suspended = False
+            self._gas_auto_reboot_suspend_reason = None
+            _LOGGER.info(
+                "Reboot correctif gaz efficace: dérive %d min → %d min",
+                old_abs_drift,
+                new_abs_drift,
+            )
+            return
+
+        if improvement < _MIN_REBOOT_IMPROVEMENT_MINUTES:
+            self._gas_auto_reboot_suspended = True
+            self._gas_auto_reboot_suspend_reason = (
+                "reboot précédent sans amélioration significative "
+                f"({old_abs_drift} min → {new_abs_drift} min)"
+            )
+            _LOGGER.warning(
+                "Reboots automatiques gaz suspendus: %s",
+                self._gas_auto_reboot_suspend_reason,
+            )
+        else:
+            self._gas_auto_reboot_suspended = False
+            self._gas_auto_reboot_suspend_reason = None
+            _LOGGER.info(
+                "Reboot correctif gaz utile: dérive améliorée de %d à %d min",
+                old_abs_drift,
+                new_abs_drift,
+            )
+
     async def _async_observe_gas_reading(self, data: dict) -> None:
-        """Remember when a new gas index is actually observed, without altering it."""
+        """Remember when a new gas index is observed, without altering the value."""
         gas_meter = next(
             (
                 meter
@@ -161,15 +243,18 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         previous = self._gas_last_raw_value
         self._gas_last_raw_value = raw
 
-        # The first value after installing this version establishes a baseline
-        # only. A later positive change, including 0 -> the previous real index
-        # after a reboot, is considered a newly observed MPE/MPR publication.
+        # The first value establishes a baseline only. A later positive change,
+        # including 0 -> a real value after a reboot, is a detected publication.
         detected = previous is not None and raw > 0 and raw != previous
         if detected:
-            self._gas_last_detected_at = dt_util.now()
+            detected_at = dt_util.now()
+            self._gas_last_detected_at = detected_at
+            self._gas_detection_history.append(detected_at)
+            self._gas_detection_history = self._gas_detection_history[-3:]
+            await self._async_evaluate_reboot_effectiveness(detected_at)
             _LOGGER.info(
                 "Nouvelle relève gaz détectée à %s, index=%s m³",
-                self._gas_last_detected_at.isoformat(timespec="seconds"),
+                detected_at.isoformat(timespec="seconds"),
                 raw,
             )
 
@@ -292,11 +377,18 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._reboot_grace_until = time.monotonic() + _REBOOT_GRACE_SECONDS
         if automatic:
             self._gas_last_auto_reboot_date = now.date().isoformat()
+            self._gas_awaiting_post_reboot_reading = True
+            drift = self.gas_drift_minutes
+            self._gas_pre_reboot_abs_drift = abs(drift) if drift is not None else None
         await self._async_save_gas_state()
         _LOGGER.warning("Redémarrage Wiser MIP demandé: %s", reason)
 
     async def _async_maybe_correct_gas_drift(self) -> None:
         if not self._gas_drift_control or self._gas_last_detected_at is None:
+            return
+        if self._gas_auto_reboot_suspended or self._gas_awaiting_post_reboot_reading:
+            return
+        if not self._two_recent_readings_confirm_drift():
             return
 
         now = dt_util.now()
@@ -388,6 +480,10 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             "tolerance_minutes": self._gas_tolerance_minutes,
             "control_time": self._gas_control_time,
             "automatic_control": self._gas_drift_control,
+            "confirmed_samples": len(self._gas_detection_history),
+            "awaiting_post_reboot_reading": self._gas_awaiting_post_reboot_reading,
+            "automatic_reboot_suspended": self._gas_auto_reboot_suspended,
+            "automatic_reboot_suspend_reason": self._gas_auto_reboot_suspend_reason,
             "last_reboot_at": self._gas_last_reboot_at,
             "last_reboot_reason": self._gas_last_reboot_reason,
         }
