@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any, Callable
 
 from homeassistant.components.energy.data import async_get_manager
@@ -17,13 +18,24 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, METER_UNIT_KWH, METER_UNIT_M3, METER_UNIT_WH
+from .const import (
+    CONF_LOAD_NAME_PREFIX,
+    CONF_METER_ENABLED_PREFIX,
+    CONF_METER_UNIT_PREFIX,
+    DOMAIN,
+    METER_UNIT_KWH,
+    METER_UNIT_M3,
+    METER_UNIT_WH,
+)
 from .coordinator import WiserLinkCoordinator
 from .meter import (
+    find_meter_by_identity,
     is_gas_meter,
     is_water_meter,
+    meter_api_name,
     meter_effective_unit,
     meter_enabled,
+    meter_identity,
     meter_name,
     normalized_energy_unit,
     normalized_power_unit,
@@ -76,6 +88,7 @@ VOLUME_METRIC = Metric(
 )
 
 _LEGACY_GAS_ENERGY_ENTITY_ID = "sensor.wiser_energy_gaz_conso"
+_LEGACY_SENSOR_UNIQUE_RE = re.compile(r"^(?P<prefix>.+)_(?P<index>\d+)_(?P<metric>power|energyconsumed)$")
 
 _MPR_TYPE_NAMES = {
     "Gas Meter": "Compteur gaz",
@@ -176,11 +189,11 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 def _metrics_for_meter(
-    settings: dict[str, Any], index: int, meter: dict[str, Any]
+    settings: dict[str, Any], meter: dict[str, Any]
 ) -> tuple[Metric, ...]:
     """Build metrics from the selected unit, falling back to the Wiser API."""
     metrics: list[Metric] = []
-    unit = meter_effective_unit(settings, index, meter)
+    unit = meter_effective_unit(settings, meter)
 
     if unit != METER_UNIT_M3 and "Power" in meter and normalized_power_unit(meter) == "w":
         metrics.append(POWER_METRIC)
@@ -197,6 +210,131 @@ def _metrics_for_meter(
     return tuple(metrics)
 
 
+def _registry_text(item: er.RegistryEntry) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (
+            item.entity_id,
+            getattr(item, "name", None),
+            getattr(item, "original_name", None),
+        )
+    ).lower()
+
+
+def _registry_device_class(item: er.RegistryEntry) -> str:
+    value = getattr(item, "device_class", None) or getattr(
+        item, "original_device_class", None
+    )
+    return str(value or "").lower()
+
+
+def _infer_legacy_identity(
+    item: er.RegistryEntry, meters: list[dict[str, Any]]
+) -> str | None:
+    """Infer the semantic identity of one old index-based entity conservatively."""
+    text = _registry_text(item)
+    device_class = _registry_device_class(item)
+
+    if device_class == "gas" or " gaz " in f" {text} " or " gas " in f" {text} ":
+        return "gas_meter"
+
+    if device_class == "water":
+        current_water = [meter_identity(meter) for meter in meters if is_water_meter(meter)]
+        if "chaud" in text or "hot" in text:
+            return "hot_water_meter"
+        if "froid" in text or "cold" in text:
+            return "cold_water_meter"
+        if len(set(current_water)) == 1:
+            return current_water[0]
+        return "water_meter"
+
+    # API names are the safest way to recover custom CT identities.
+    for meter in meters:
+        api_name = meter_api_name(meter).strip().lower()
+        if api_name and api_name in text:
+            return meter_identity(meter)
+
+    for number in range(1, 6):
+        if re.search(rf"\b(?:ct|load)\s*{number}\b", text):
+            return f"load{number}"
+
+    semantic_words = (
+        (("compteur électrique", "electricity meter", " tic "), "electricity_meter"),
+        (("autres", "others"), "others"),
+        (("climatisation", "cooling"), "cooling"),
+        (("prises", "sockets"), "sockets"),
+        (("chauffage", "heating"), "heating"),
+        (("eau chaude", "hot water"), "hot_water"),
+    )
+    for words, identity in semantic_words:
+        if any(word in text for word in words):
+            return identity
+    return None
+
+
+def _migrate_legacy_meter_entities_and_options(
+    hass: HomeAssistant, entry: ConfigEntry, meters: list[dict[str, Any]]
+) -> None:
+    """Move old numeric identities/options to semantic keys without swapping meters."""
+    registry = er.async_get(hass)
+    prefix = _entry_prefix(entry)
+    index_to_identity: dict[int, str] = {}
+
+    for item in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if item.platform != DOMAIN or item.domain != "sensor":
+            continue
+        match = _LEGACY_SENSOR_UNIQUE_RE.fullmatch(item.unique_id or "")
+        if match is None or match.group("prefix") != prefix:
+            continue
+
+        identity = _infer_legacy_identity(item, meters)
+        if identity is None:
+            continue
+        index = int(match.group("index"))
+        index_to_identity[index] = identity
+        metric = match.group("metric")
+        new_unique_id = f"{prefix}_{identity}_{metric}"
+        existing = registry.async_get_entity_id("sensor", DOMAIN, new_unique_id)
+        if existing is None or existing == item.entity_id:
+            registry.async_update_entity(item.entity_id, new_unique_id=new_unique_id)
+
+    # A disabled entity may not have enough registry metadata. A meaningful old
+    # custom name (Gaz/Eau/CT/etc.) can still safely identify its option group.
+    for key, value in entry.options.items():
+        match = re.fullmatch(rf"{re.escape(CONF_LOAD_NAME_PREFIX)}(\d+)", key)
+        if match is None or not value:
+            continue
+        fake = type("LegacyOption", (), {
+            "entity_id": str(value),
+            "name": str(value),
+            "original_name": str(value),
+            "device_class": None,
+            "original_device_class": None,
+        })()
+        identity = _infer_legacy_identity(fake, meters)
+        if identity is not None:
+            index_to_identity.setdefault(int(match.group(1)), identity)
+
+    if not index_to_identity:
+        return
+
+    options = dict(entry.options)
+    changed = False
+    for index, identity in index_to_identity.items():
+        for option_prefix in (
+            CONF_METER_ENABLED_PREFIX,
+            CONF_LOAD_NAME_PREFIX,
+            CONF_METER_UNIT_PREFIX,
+        ):
+            old_key = f"{option_prefix}{index}"
+            new_key = f"{option_prefix}{identity}"
+            if old_key in options and new_key not in options:
+                options[new_key] = options[old_key]
+                changed = True
+    if changed:
+        hass.config_entries.async_update_entry(entry, options=options)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -209,15 +347,17 @@ async def async_setup_entry(
         for meter in coordinator.data.get("UsageMeterList", [])
         if isinstance(meter, dict)
     ]
+
+    _migrate_legacy_meter_entities_and_options(hass, entry, meters)
     settings = {**entry.data, **entry.options}
     _remove_obsolete_volume_power_entities(hass, entry, settings, meters)
     await _migrate_energy_dashboard_gas_source(hass, entry, settings, meters)
 
     async_add_entities(
-        WiserLinkSensor(coordinator, entry, index, meter, metric)
-        for index, meter in enumerate(meters)
-        if meter_enabled(settings, index, meter, meters)
-        for metric in _metrics_for_meter(settings, index, meter)
+        WiserLinkSensor(coordinator, entry, meter, metric)
+        for meter in meters
+        if meter_enabled(settings, meter, meters)
+        for metric in _metrics_for_meter(settings, meter)
     )
 
     diagnostics: list[tuple[str, str, Callable[[dict], Any]]] = [
@@ -296,15 +436,15 @@ async def _migrate_energy_dashboard_gas_source(
     prefix = _entry_prefix(entry)
     gas_entity_ids: list[str] = []
 
-    for index, meter in enumerate(meters):
+    for meter in meters:
         if (
-            not meter_enabled(settings, index, meter, meters)
-            or meter_effective_unit(settings, index, meter) != METER_UNIT_M3
+            not meter_enabled(settings, meter, meters)
+            or meter_effective_unit(settings, meter) != METER_UNIT_M3
             or not is_gas_meter(meter)
         ):
             continue
         entity_id = registry.async_get_entity_id(
-            "sensor", DOMAIN, f"{prefix}_{index}_energyconsumed"
+            "sensor", DOMAIN, f"{prefix}_{meter_identity(meter)}_energyconsumed"
         )
         if entity_id is not None:
             gas_entity_ids.append(entity_id)
@@ -542,18 +682,18 @@ def _remove_obsolete_volume_power_entities(
     """Remove legacy power entities for entries explicitly treated as volumes."""
     registry = er.async_get(hass)
     prefix = _entry_prefix(entry)
-    for index, meter in enumerate(meters):
-        if meter_effective_unit(settings, index, meter) != METER_UNIT_M3:
+    for meter in meters:
+        if meter_effective_unit(settings, meter) != METER_UNIT_M3:
             continue
         entity_id = registry.async_get_entity_id(
-            "sensor", DOMAIN, f"{prefix}_{index}_power"
+            "sensor", DOMAIN, f"{prefix}_{meter_identity(meter)}_power"
         )
         if entity_id is not None:
             registry.async_remove(entity_id)
 
 
 class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
-    """One value from one UsageMeter entry."""
+    """One value bound to one semantic UsageMeter identity."""
 
     _attr_has_entity_name = True
 
@@ -561,16 +701,17 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
         self,
         coordinator: WiserLinkCoordinator,
         entry: ConfigEntry,
-        index: int,
         meter: dict,
         metric: Metric,
     ) -> None:
         super().__init__(coordinator)
-        self._index = index
+        self._meter_identity = meter_identity(meter)
         self._metric = metric
         settings = {**entry.data, **entry.options}
-        self._attr_name = f"{meter_name(settings, meter, index)} {metric.label}"
-        self._attr_unique_id = f"{_entry_prefix(entry)}_{index}_{metric.field.lower()}"
+        self._attr_name = f"{meter_name(settings, meter)} {metric.label}"
+        self._attr_unique_id = (
+            f"{_entry_prefix(entry)}_{self._meter_identity}_{metric.field.lower()}"
+        )
         self._attr_native_unit_of_measurement = metric.unit
         if metric is VOLUME_METRIC and is_gas_meter(meter):
             self._attr_device_class = SensorDeviceClass.GAS
@@ -585,11 +726,27 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
             self._attr_icon = "mdi:water"
         self._attr_device_info = _device_info(entry)
 
-    def _meter(self) -> dict | None:
+    def _meter_with_index(self) -> tuple[int, dict] | None:
         meters = self.coordinator.data.get("UsageMeterList", [])
-        if self._index >= len(meters) or not isinstance(meters[self._index], dict):
+        if not isinstance(meters, list):
             return None
-        return meters[self._index]
+        found = find_meter_by_identity(
+            [meter for meter in meters if isinstance(meter, dict)],
+            self._meter_identity,
+        )
+        if found is None:
+            return None
+        # find_meter_by_identity received the filtered list; recover the true API
+        # index for diagnostics without ever using it as the entity identity.
+        _, meter = found
+        for api_index, candidate in enumerate(meters):
+            if candidate is meter:
+                return api_index, meter
+        return None
+
+    def _meter(self) -> dict | None:
+        found = self._meter_with_index()
+        return found[1] if found else None
 
     @property
     def available(self) -> bool:
@@ -625,9 +782,11 @@ class WiserLinkSensor(CoordinatorEntity[WiserLinkCoordinator], SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        meter = self._meter() or {}
+        found = self._meter_with_index()
+        meter = found[1] if found else {}
         return {
-            "api_index": self._index,
+            "api_identity": self._meter_identity,
+            "api_index": found[0] if found else None,
             "api_type": meter.get("Type"),
             "api_name": meter.get("Name"),
             "api_power_unit": meter.get("Unit_Power"),
