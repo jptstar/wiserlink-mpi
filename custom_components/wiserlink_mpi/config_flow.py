@@ -14,7 +14,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import WiserLinkAuthError, WiserLinkClient, WiserLinkError
 from .const import (
     CONF_FAILURE_THRESHOLD,
-    CONF_GAS_CONTROL_TIME,
     CONF_GAS_DRIFT_CONTROL,
     CONF_GAS_TARGET_TIME,
     CONF_GAS_TOLERANCE_MINUTES,
@@ -23,7 +22,6 @@ from .const import (
     CONF_METER_UNIT_PREFIX,
     CONF_SCAN_INTERVAL,
     DEFAULT_FAILURE_THRESHOLD,
-    DEFAULT_GAS_CONTROL_TIME,
     DEFAULT_GAS_DRIFT_CONTROL,
     DEFAULT_GAS_TARGET_TIME,
     DEFAULT_GAS_TOLERANCE_MINUTES,
@@ -37,7 +35,12 @@ from .const import (
     METER_UNIT_M3,
     METER_UNIT_WH,
 )
-from .meter import meter_enabled, meter_name, meter_unit_override
+from .meter import (
+    meter_enabled,
+    meter_name,
+    meter_option_key,
+    meter_unit_override,
+)
 
 
 _UNIT_SELECTOR = selector.SelectSelector(
@@ -124,7 +127,7 @@ class WiserLinkOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate and save connection, meters and gas drift protection."""
+        """Validate and save connection, meters and gas drift observation."""
         current = {**self._entry.data, **self._entry.options}
         coordinator = self._entry.runtime_data
         meters = (
@@ -201,32 +204,28 @@ class WiserLinkOptionsFlow(OptionsFlow):
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
-            vol.Required(
-                CONF_GAS_CONTROL_TIME,
-                default=current.get(CONF_GAS_CONTROL_TIME, DEFAULT_GAS_CONTROL_TIME),
-            ): selector.TimeSelector(),
         }
 
-        for index, meter in enumerate(meters):
-            enabled_key = f"{CONF_METER_ENABLED_PREFIX}{index}"
-            name_key = f"{CONF_LOAD_NAME_PREFIX}{index}"
-            unit_key = f"{CONF_METER_UNIT_PREFIX}{index}"
+        for meter in meters:
+            enabled_key = meter_option_key(CONF_METER_ENABLED_PREFIX, meter)
+            name_key = meter_option_key(CONF_LOAD_NAME_PREFIX, meter)
+            unit_key = meter_option_key(CONF_METER_UNIT_PREFIX, meter)
             fields[
                 vol.Required(
                     enabled_key,
-                    default=meter_enabled(current, index, meter, meters),
+                    default=meter_enabled(current, meter, meters),
                 )
             ] = bool
             fields[
                 vol.Required(
                     name_key,
-                    default=meter_name(current, meter, index),
+                    default=meter_name(current, meter),
                 )
             ] = str
             fields[
                 vol.Required(
                     unit_key,
-                    default=meter_unit_override(current, index),
+                    default=meter_unit_override(current, meter),
                 )
             ] = _UNIT_SELECTOR
 
