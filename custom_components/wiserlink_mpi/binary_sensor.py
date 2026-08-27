@@ -13,7 +13,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import WiserLinkCoordinator
-from .meter import is_gas_meter
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -84,12 +83,10 @@ async def async_setup_entry(
             ]
         )
 
-    if any(
-        isinstance(meter, dict) and is_gas_meter(meter)
-        for meter in coordinator.data.get("UsageMeterList", [])
-    ):
-        entities.append(WiserLinkGasDriftSensor(coordinator, entry))
-
+    # Keep the diagnostic entity even if the Gas Meter temporarily disappears.
+    # Its state then remains unknown/last-observed instead of silently turning the
+    # water meter into the gas meter because the UsageMeter array shifted.
+    entities.append(WiserLinkGasDriftSensor(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -188,7 +185,7 @@ class WiserLinkMprBinarySensor(
 class WiserLinkGasDriftSensor(
     CoordinatorEntity[WiserLinkCoordinator], BinarySensorEntity
 ):
-    """Report whether the detected daily gas reading has drifted from target."""
+    """Report observation-only drift of confirmed gas index changes."""
 
     _attr_has_entity_name = True
     _attr_name = "Dérive relève gaz"
@@ -215,23 +212,19 @@ class WiserLinkGasDriftSensor(
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.gas_monitor_data
         return {
-            "derniere_releve_detectee": self._local_iso(data.get("last_detected_at")),
-            "prochaine_releve_estimee": self._local_iso(data.get("next_estimated_at")),
-            "derive_cycle_minutes": data.get("drift_minutes"),
-            "derive_cible_minutes": data.get("target_drift_minutes"),
-            "heure_cible": data.get("target_time"),
-            "heure_reference_cycle": data.get("cycle_reference_time"),
-            "heure_reference_effective": data.get("effective_reference_time"),
-            "tolerance_minutes": data.get("tolerance_minutes"),
-            "heure_controle_reboot": data.get("control_time"),
-            "fenetre_correction_valide": data.get("correction_window_valid"),
-            "controle_automatique": data.get("automatic_control"),
-            "attente_nouvelle_releve_apres_reboot": data.get(
-                "waiting_for_new_reading_after_reboot"
+            "derniere_variation_gaz_confirmee": self._local_iso(
+                data.get("last_detected_at")
             ),
-            "reboots_automatiques_suspendus": data.get("auto_reboot_suspended"),
-            "raison_suspension_reboots": data.get("auto_reboot_suspend_reason"),
+            "prochaine_variation_estimee": self._local_iso(
+                data.get("next_estimated_at")
+            ),
+            "derive_minutes": data.get("drift_minutes"),
+            "heure_cible": data.get("target_time"),
+            "tolerance_minutes": data.get("tolerance_minutes"),
+            "surveillance_active": data.get("observation_enabled"),
+            "reboot_automatique": data.get("automatic_reboot"),
+            "raison_reboot_automatique": data.get("automatic_reboot_reason"),
             "index_gaz_observe_m3": data.get("raw_value"),
-            "dernier_redemarrage": self._local_iso(data.get("last_reboot_at")),
+            "dernier_redemarrage_manuel": self._local_iso(data.get("last_reboot_at")),
             "raison_dernier_redemarrage": data.get("last_reboot_reason"),
         }
