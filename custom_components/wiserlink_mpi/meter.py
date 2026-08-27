@@ -21,11 +21,30 @@ from .const import (
 _LOAD_RE = re.compile(r"^load\s*([1-5])$", re.IGNORECASE)
 _USAGE_TYPES = {"heating", "cooling", "hot water", "sockets"}
 _VALID_UNIT_OVERRIDES = {METER_UNIT_AUTO, METER_UNIT_KWH, METER_UNIT_WH, METER_UNIT_M3}
+_KNOWN_TYPE_KEYS = {
+    "heating": "heating",
+    "cooling": "cooling",
+    "hot water": "hot_water",
+    "sockets": "sockets",
+    "others": "others",
+    "electricity meter": "electricity_meter",
+    "gas meter": "gas_meter",
+    "cold water meter": "cold_water_meter",
+    "hot water meter": "hot_water_meter",
+    "water meter": "water_meter",
+    "calorimeter": "calorimeter",
+}
 
 
 def _text(value: Any) -> str:
     """Return a compact string for an API value."""
     return str(value).strip() if value is not None else ""
+
+
+def _slug(value: str) -> str:
+    """Return a compact stable-ish key for an unknown API type."""
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "unknown_meter"
 
 
 def meter_type(meter: Mapping[str, Any]) -> str:
@@ -73,6 +92,49 @@ def is_water_meter(meter: Mapping[str, Any]) -> bool:
     return is_volume_meter(meter) and "water" in combined
 
 
+def meter_identity(meter: Mapping[str, Any]) -> str:
+    """Return the stable semantic identity used for entities and options.
+
+    The Wiser may omit one UsageMeter entry after a reboot. Therefore the list
+    position is never an identity: Load4 stays ``load4`` even when Load3 is
+    absent, and a Cold Water Meter can never take over the former Gas Meter
+    entity merely because it moved to the same array index.
+    """
+    if number := load_number(meter):
+        return f"load{number}"
+
+    kind = meter_type(meter).lower()
+    if is_gas_meter(meter):
+        return "gas_meter"
+    if is_water_meter(meter):
+        if "hot" in kind:
+            return "hot_water_meter"
+        if "cold" in kind:
+            return "cold_water_meter"
+        return "water_meter"
+    if kind in _KNOWN_TYPE_KEYS:
+        return _KNOWN_TYPE_KEYS[kind]
+
+    # Unknown firmwares/types are still bound to their API type instead of the
+    # volatile list position. Name is only used when the type itself is empty.
+    return _slug(meter_type(meter) or meter_api_name(meter))
+
+
+def meter_option_key(prefix: str, meter: Mapping[str, Any]) -> str:
+    """Return one stable per-meter option key."""
+    return f"{prefix}{meter_identity(meter)}"
+
+
+def find_meter_by_identity(
+    meters: Sequence[Mapping[str, Any]], identity: str
+) -> tuple[int, Mapping[str, Any]] | None:
+    """Find a meter and its current API index from its stable identity."""
+    for index, meter in enumerate(meters):
+        if meter_identity(meter) == identity:
+            return index, meter
+    return None
+
+
 def is_others_meter(meter: Mapping[str, Any]) -> bool:
     """Return whether this is the calculated Others entry."""
     return meter_type(meter).lower() == "others"
@@ -104,17 +166,17 @@ def meter_default_enabled(
 
 def meter_enabled(
     settings: Mapping[str, Any],
-    index: int,
     meter: Mapping[str, Any],
     meters: Sequence[Mapping[str, Any]],
 ) -> bool:
-    """Return the configured enabled state with compatibility for old options."""
-    key = f"{CONF_METER_ENABLED_PREFIX}{index}"
+    """Return the configured enabled state using only stable per-meter keys."""
+    key = meter_option_key(CONF_METER_ENABLED_PREFIX, meter)
     if key in settings:
         return bool(settings[key])
 
-    # Old versions exposed global gas/water booleans. Keep an explicit old True,
-    # but never let the previous default False hide a newly detected real meter.
+    # Old releases exposed global gas/water booleans. Keep an explicit old True,
+    # but never reuse the volatile numeric per-meter keys here: after a missing
+    # UsageMeter entry they may belong to a completely different physical meter.
     if is_gas_meter(meter) and settings.get(CONF_ENABLE_GAS) is True:
         return True
     if is_water_meter(meter) and settings.get(CONF_ENABLE_WATER) is True:
@@ -123,7 +185,7 @@ def meter_enabled(
     return meter_default_enabled(meter, meters)
 
 
-def meter_default_name(meter: Mapping[str, Any], index: int) -> str:
+def meter_default_name(meter: Mapping[str, Any]) -> str:
     """Return a useful French name, preferring the name configured in the MPI."""
     if name := meter_api_name(meter):
         return name
@@ -135,7 +197,7 @@ def meter_default_name(meter: Mapping[str, Any], index: int) -> str:
     if is_gas_meter(meter):
         return "Gaz chauffage" if kind == "heating" else "Gaz"
     if is_water_meter(meter):
-        return "Eau chaude" if "hot" in kind else "Eau"
+        return "Eau chaude" if "hot" in kind else "Eau froide"
 
     names = {
         "heating": "Chauffage",
@@ -149,41 +211,28 @@ def meter_default_name(meter: Mapping[str, Any], index: int) -> str:
         "gas meter": "Gaz",
         "calorimeter": "Calorimètre",
     }
-    return names.get(kind, meter_type(meter) or f"Voie {index + 1}")
+    return names.get(kind, meter_type(meter) or meter_identity(meter))
 
 
-def _legacy_default_name(index: int) -> str | None:
-    """Return the automatic name stored by releases <= 0.7.1."""
-    if 0 <= index <= 9:
-        return f"Voie {index + 1}"
-    if index == 10:
-        return "Module gaz"
-    if index == 11:
-        return "Module eau"
-    return None
+def meter_name(settings: Mapping[str, Any], meter: Mapping[str, Any]) -> str:
+    """Return a stable user override or the detected/API meter name."""
+    custom = _text(settings.get(meter_option_key(CONF_LOAD_NAME_PREFIX, meter)))
+    return custom or meter_default_name(meter)
 
 
-def meter_name(
-    settings: Mapping[str, Any], meter: Mapping[str, Any], index: int
+def meter_unit_override(
+    settings: Mapping[str, Any], meter: Mapping[str, Any]
 ) -> str:
-    """Return a real user override or the detected/API meter name."""
-    custom = _text(settings.get(f"{CONF_LOAD_NAME_PREFIX}{index}"))
-    if custom and custom != _legacy_default_name(index):
-        return custom
-    return meter_default_name(meter, index)
-
-
-def meter_unit_override(settings: Mapping[str, Any], index: int) -> str:
-    """Return a validated per-meter unit override."""
-    value = _text(settings.get(f"{CONF_METER_UNIT_PREFIX}{index}")).lower()
+    """Return a validated stable per-meter unit override."""
+    value = _text(settings.get(meter_option_key(CONF_METER_UNIT_PREFIX, meter))).lower()
     return value if value in _VALID_UNIT_OVERRIDES else METER_UNIT_AUTO
 
 
 def meter_effective_unit(
-    settings: Mapping[str, Any], index: int, meter: Mapping[str, Any]
+    settings: Mapping[str, Any], meter: Mapping[str, Any]
 ) -> str:
     """Return the configured unit or the unit reported by the MPI in Auto mode."""
-    override = meter_unit_override(settings, index)
+    override = meter_unit_override(settings, meter)
     if override != METER_UNIT_AUTO:
         return override
 
