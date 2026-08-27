@@ -96,8 +96,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
     await coordinator.async_initialize()
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    # The sensor platform may perform a one-time migration from volatile numeric
+    # UsageMeter indexes to stable semantic identities. Register the options
+    # update listener only after platform setup so that migration cannot trigger
+    # an unnecessary reload while the entry is still being initialized.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_COMMAND):
 
