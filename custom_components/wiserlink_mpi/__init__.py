@@ -25,6 +25,7 @@ from .const import (
     SERVICE_SEND_COMMAND,
 )
 from .coordinator import WiserLinkCoordinator
+from .meter import meter_identity
 from .migration import migrate_meter_identities
 
 type WiserLinkConfigEntry = ConfigEntry[WiserLinkCoordinator]
@@ -76,6 +77,15 @@ def _get_target_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry:
     return target
 
 
+def _usage_meter_identities(data: dict[str, Any]) -> set[str]:
+    """Return the semantic topology currently exposed by UsageMeter."""
+    return {
+        meter_identity(meter)
+        for meter in data.get("UsageMeterList", [])
+        if isinstance(meter, dict)
+    }
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) -> bool:
     """Set up one MPI."""
     settings = {**entry.data, **entry.options}
@@ -113,6 +123,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
     # migration above cannot trigger a reload while the entry is initializing.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    # The Wiser may temporarily omit a UsageMeter entry after a power cut. Keep
+    # the historical entity in the registry as unavailable, then reload the
+    # platforms automatically as soon as the semantic topology changes so a
+    # returning Load3/Gas/Water meter is rebound without user intervention.
+    known_identities = _usage_meter_identities(coordinator.data)
+
+    def _async_topology_listener() -> None:
+        nonlocal known_identities
+        current_identities = _usage_meter_identities(coordinator.data)
+        if current_identities == known_identities:
+            return
+        known_identities = current_identities
+        hass.async_create_task(
+            hass.config_entries.async_reload(entry.entry_id),
+            f"Reload {DOMAIN} after UsageMeter topology change",
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(_async_topology_listener))
 
     if not hass.services.has_service(DOMAIN, SERVICE_SEND_COMMAND):
 
