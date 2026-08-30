@@ -24,6 +24,11 @@ def _entry_prefix(entry: ConfigEntry) -> str:
     return entry.unique_id or entry.entry_id
 
 
+def _enum_value(value: Any) -> Any:
+    """Return the raw value for Home Assistant StrEnum-style fields."""
+    return getattr(value, "value", value)
+
+
 def _snapshot(item: er.RegistryEntry) -> dict[str, Any]:
     """Convert one registry entry to the pure migration model format."""
     return {
@@ -31,8 +36,10 @@ def _snapshot(item: er.RegistryEntry) -> dict[str, Any]:
         "unique_id": item.unique_id,
         "name": getattr(item, "name", None),
         "original_name": getattr(item, "original_name", None),
-        "device_class": getattr(item, "device_class", None),
-        "original_device_class": getattr(item, "original_device_class", None),
+        "device_class": _enum_value(getattr(item, "device_class", None)),
+        "original_device_class": _enum_value(
+            getattr(item, "original_device_class", None)
+        ),
         "created_at": getattr(item, "created_at", None),
     }
 
