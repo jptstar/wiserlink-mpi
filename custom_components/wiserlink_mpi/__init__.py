@@ -7,8 +7,14 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_PASSWORD,
+    CONF_PORT,
+    CONF_USERNAME,
+    EVENT_HOMEASSISTANT_STARTED,
+)
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -111,8 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
 
     # Repair old index-based entities before sensor setup. This lets the platform
     # bind the current semantic entity directly to the user's historical entity_id
-    # and statistics instead of creating a duplicate (for example Teleinfo Conso
-    # Total vs Compteur électrique).
+    # and statistics instead of creating a duplicate.
     meters = [
         meter
         for meter in coordinator.data.get("UsageMeterList", [])
@@ -120,19 +125,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
     ]
     migrate_meter_identities(hass, entry, meters)
 
-    # Energy may still reference a historical WiserLink gas entity_id that a
-    # previous migration removed. Repair it before platform setup whenever the
-    # canonical gas entity already exists in the registry.
+    # If Energy is already loaded, repair the historical gas registry mapping now,
+    # before the sensor platform binds the runtime entity. No entity-id rename is
+    # used; the canonical unique id is moved to the historical registry entity.
     await async_repair_energy_gas_source(hass, entry)
 
-    # Register the options listener only after platform setup so the one-time
-    # migration above cannot trigger a reload while the entry is initializing.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
-    # Run once more after platform setup for the case where the gas entity had to
-    # be created during this very startup.
-    await async_repair_energy_gas_source(hass, entry)
+    async def _async_post_start_gas_repair(_event: Any = None) -> None:
+        """Repair gas history once Energy/Recorder are fully initialized."""
+        if await async_repair_energy_gas_source(hass, entry):
+            await hass.config_entries.async_reload(entry.entry_id)
+
+    # During a full HA startup the Energy manager may not yet be populated while
+    # WiserLink is setting up. Retry exactly once after HA reaches running state.
+    # On an integration reload/update HA is already running, so execute now.
+    if hass.state is CoreState.running:
+        entry.async_create_task(
+            hass,
+            _async_post_start_gas_repair(),
+            name=f"Repair {DOMAIN} historical gas entity",
+        )
+    else:
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED,
+                _async_post_start_gas_repair,
+            )
+        )
 
     # The Wiser may temporarily omit a UsageMeter entry after a power cut. Keep
     # the historical entity in the registry as unavailable, then reload the
