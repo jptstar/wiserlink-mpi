@@ -14,6 +14,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 _LEGACY_GAS_SOURCE = "sensor.wiser_energy_gaz_conso"
+_TEMP_UNIQUE_SUFFIX = "__historical_gas_replaced"
 
 
 def _entry_prefix(entry: ConfigEntry) -> str:
@@ -45,77 +46,134 @@ def _is_stale_wiserlink_gas_source(
     )
 
 
-def _restore_historical_registry_entity(
+def _move_canonical_unique_id_to_historical_entity(
     registry: er.EntityRegistry,
     entry: ConfigEntry,
     canonical_unique_id: str,
     current_entity_id: str,
     historical_entity_id: str,
-) -> str:
-    """Make the historical entity_id the canonical gas entity when safe.
+) -> tuple[str, bool]:
+    """Bind the gas unique id to the historical entity id without renaming it.
 
-    The recorder long-term statistic id is derived from the entity id. Therefore
-    the historical entity id wins over a migration-created replacement. We remove
-    only the recent duplicate and move the canonical unique id onto the historical
-    registry entry. No recorder/statistics rows are deleted or rewritten here.
+    Recorder listens for entity-id rename events and may try to migrate statistics.
+    That is exactly what we must avoid here because the historical statistic id
+    already exists. Instead we only move unique ids in the entity registry:
+
+    * the migration-created gas entry receives a temporary unique id;
+    * the historical entity keeps/is created with its historical entity id;
+    * the canonical gas unique id is attached to that historical entity;
+    * the recent duplicate is then removed.
+
+    No entity-id rename event is emitted, so existing recorder/statistics rows are
+    left untouched. On the following config-entry reload, new gas states are
+    written directly under the historical entity/statistic id.
     """
     if historical_entity_id == _LEGACY_GAS_SOURCE:
-        return current_entity_id
+        return current_entity_id, False
+
+    current = registry.async_get(current_entity_id)
+    if current is None or current.config_entry_id != entry.entry_id:
+        return current_entity_id, False
 
     historical = registry.async_get(historical_entity_id)
-    current = registry.async_get(current_entity_id)
+    if historical is not None and historical.config_entry_id != entry.entry_id:
+        return current_entity_id, False
+
+    temp_unique_id = f"{canonical_unique_id}{_TEMP_UNIQUE_SUFFIX}"
+    stale_temp_entity_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, temp_unique_id
+    )
+    if stale_temp_entity_id and stale_temp_entity_id != current_entity_id:
+        stale_temp = registry.async_get(stale_temp_entity_id)
+        if stale_temp is not None and stale_temp.config_entry_id == entry.entry_id:
+            registry.async_remove(stale_temp_entity_id)
+        else:
+            return current_entity_id, False
+
+    # Free the canonical unique id without changing the recent entity_id.
+    if current.unique_id != temp_unique_id:
+        registry.async_update_entity(
+            current_entity_id,
+            new_unique_id=temp_unique_id,
+        )
 
     if historical is not None:
-        if historical.config_entry_id != entry.entry_id:
-            return current_entity_id
-        if current_entity_id != historical_entity_id and current is not None:
-            _LOGGER.warning(
-                "Suppression du doublon gaz récent %s; conservation de l'entité historique %s",
-                current_entity_id,
-                historical_entity_id,
-            )
-            registry.async_remove(current_entity_id)
-        historical = registry.async_get(historical_entity_id)
-        if historical is not None and historical.unique_id != canonical_unique_id:
-            _LOGGER.warning(
-                "Rattachement du unique_id gaz canonique à l'entité historique %s",
-                historical_entity_id,
-            )
+        # The historical registry entity survived. Reattach the canonical unique
+        # id to it, preserving its entity_id and therefore its statistics id.
+        if historical.unique_id != canonical_unique_id:
             registry.async_update_entity(
                 historical_entity_id,
                 new_unique_id=canonical_unique_id,
             )
-        return historical_entity_id
+        canonical_entity_id = historical_entity_id
+    else:
+        # The historical registry entry is gone, but Recorder/Energy still know
+        # its entity_id. Create a fresh registry entry directly under that exact
+        # object id. This is deliberately not a rename of the recent entity.
+        try:
+            domain, object_id = historical_entity_id.split(".", 1)
+        except ValueError:
+            # Put the canonical unique id back before giving up.
+            registry.async_update_entity(
+                current_entity_id,
+                new_unique_id=canonical_unique_id,
+            )
+            return current_entity_id, False
+        if domain != "sensor":
+            registry.async_update_entity(
+                current_entity_id,
+                new_unique_id=canonical_unique_id,
+            )
+            return current_entity_id, False
 
-    # If the historical id is no longer present in the registry, rename the
-    # canonical entity back to that id. This restores the recorder statistic_id
-    # expected by the Energy dashboard without touching the statistics database.
-    if current is not None:
-        _LOGGER.warning(
-            "Restauration de l'entity_id gaz historique %s à la place de %s",
-            historical_entity_id,
-            current_entity_id,
+        recreated = registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            canonical_unique_id,
+            capabilities=current.capabilities,
+            config_entry=entry,
+            device_id=current.device_id,
+            disabled_by=current.disabled_by,
+            entity_category=current.entity_category,
+            has_entity_name=current.has_entity_name,
+            hidden_by=current.hidden_by,
+            object_id_base=current.object_id_base,
+            original_device_class=current.original_device_class,
+            original_icon=current.original_icon,
+            original_name=current.original_name,
+            suggested_object_id=object_id,
+            supported_features=current.supported_features,
+            translation_key=current.translation_key,
+            unit_of_measurement=current.unit_of_measurement,
         )
-        registry.async_update_entity(
-            current_entity_id,
-            new_entity_id=historical_entity_id,
-        )
-        return historical_entity_id
+        canonical_entity_id = recreated.entity_id
+        if canonical_entity_id != historical_entity_id:
+            # Unexpected collision: remove the new entry and restore the previous
+            # canonical mapping. Do not guess or touch Recorder statistics.
+            registry.async_remove(canonical_entity_id)
+            registry.async_update_entity(
+                current_entity_id,
+                new_unique_id=canonical_unique_id,
+            )
+            return current_entity_id, False
 
-    return current_entity_id
+    _LOGGER.warning(
+        "Restauration sûre de l'entité gaz historique %s; suppression du doublon récent %s",
+        canonical_entity_id,
+        current_entity_id,
+    )
+    registry.async_remove(current_entity_id)
+    return canonical_entity_id, True
 
 
 async def async_repair_energy_gas_source(
     hass: HomeAssistant,
     entry: ConfigEntry,
-) -> None:
+) -> bool:
     """Preserve the historical WiserLink gas entity and Energy source.
 
-    Previous semantic migrations could recreate the gas sensor with a generated
-    entity id such as ``..._gaz_chauffage_volume`` while the Energy dashboard and
-    recorder history still use ``..._gaz_volume``. The historical entity id is
-    authoritative: when it can be identified unambiguously, keep/recreate that
-    registry entity and attach the canonical ``gas_meter`` unique id to it.
+    Return True when the entity registry was rebuilt and the config entry must be
+    reloaded so the running entity binds to the historical entity id.
     """
     registry = er.async_get(hass)
     prefix = _entry_prefix(entry)
@@ -124,11 +182,11 @@ async def async_repair_energy_gas_source(
         "sensor", DOMAIN, canonical_unique_id
     )
     if current_entity_id is None:
-        return
+        return False
 
     manager = await async_get_manager(hass)
     if manager.data is None:
-        return
+        return False
 
     energy_sources = manager.data.get("energy_sources", [])
     stale_sources: list[str] = []
@@ -141,22 +199,24 @@ async def async_repair_energy_gas_source(
         if _is_stale_wiserlink_gas_source(registry, entry, source_entity):
             stale_sources.append(source_entity)
 
-    # Exactly one old WiserLink gas source is an unambiguous historical identity.
-    # Keep it as the actual entity id so its recorder/statistics timeline continues
-    # under the same statistic_id.
+    registry_rebuilt = False
     unique_stale = list(dict.fromkeys(stale_sources))
     if len(unique_stale) == 1:
-        current_entity_id = _restore_historical_registry_entity(
-            registry,
-            entry,
-            canonical_unique_id,
-            current_entity_id,
-            unique_stale[0],
+        historical_entity_id = unique_stale[0]
+        current_entity_id, registry_rebuilt = (
+            _move_canonical_unique_id_to_historical_entity(
+                registry,
+                entry,
+                canonical_unique_id,
+                current_entity_id,
+                historical_entity_id,
+            )
         )
 
-    # Normally the Energy source now already points at the preserved historical
-    # entity id. Only rewrite genuinely stale WiserLink gas sources (not arbitrary
-    # user entities), notably the very old pre-integration source.
+    # If the source is the very old pre-integration gas entity, or preservation of
+    # a historical WiserLink id was impossible, point Energy at the canonical
+    # entity. When preservation succeeded this normally changes nothing because
+    # Energy already points at the historical id.
     changed = False
     repaired_sources: list[dict[str, Any]] = []
     for source in energy_sources:
@@ -174,7 +234,9 @@ async def async_repair_energy_gas_source(
 
     if changed:
         _LOGGER.warning(
-            "Source gaz du tableau Énergie réparée vers l'entité historique %s",
+            "Source gaz du tableau Énergie réparée vers %s",
             current_entity_id,
         )
         await manager.async_update({"energy_sources": repaired_sources})
+
+    return registry_rebuilt
