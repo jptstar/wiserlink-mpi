@@ -25,6 +25,7 @@ from .const import (
     SERVICE_SEND_COMMAND,
 )
 from .coordinator import WiserLinkCoordinator
+from .energy_migration import async_repair_energy_gas_source
 from .meter import meter_identity
 from .migration import migrate_meter_identities
 
@@ -119,10 +120,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: WiserLinkConfigEntry) ->
     ]
     migrate_meter_identities(hass, entry, meters)
 
+    # Energy may still reference a historical WiserLink gas entity_id that a
+    # previous migration removed. Repair it before platform setup whenever the
+    # canonical gas entity already exists in the registry.
+    await async_repair_energy_gas_source(hass, entry)
+
     # Register the options listener only after platform setup so the one-time
     # migration above cannot trigger a reload while the entry is initializing.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    # Run once more after platform setup for the case where the gas entity had to
+    # be created during this very startup.
+    await async_repair_energy_gas_source(hass, entry)
 
     # The Wiser may temporarily omit a UsageMeter entry after a power cut. Keep
     # the historical entity in the registry as unavailable, then reload the
