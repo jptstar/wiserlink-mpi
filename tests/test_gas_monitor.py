@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import unittest
@@ -20,6 +21,72 @@ SPEC.loader.exec_module(gas_monitor)
 
 
 class GasMonitorTests(unittest.TestCase):
+    def test_positive_to_positive_change_is_detected(self) -> None:
+        self.assertTrue(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("11249.60"),
+                current=Decimal("11252.27"),
+                continuous_presence=True,
+                previous_present_polls=1,
+                zero_rise_grace_elapsed=False,
+            )
+        )
+
+    def test_zero_to_positive_requires_continuous_presence(self) -> None:
+        self.assertFalse(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("0"),
+                current=Decimal("2.67"),
+                continuous_presence=False,
+                previous_present_polls=10,
+                zero_rise_grace_elapsed=True,
+            )
+        )
+
+    def test_zero_to_positive_requires_multiple_previous_polls(self) -> None:
+        self.assertFalse(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("0"),
+                current=Decimal("2.67"),
+                continuous_presence=True,
+                previous_present_polls=1,
+                zero_rise_grace_elapsed=True,
+            )
+        )
+
+    def test_zero_to_positive_is_ignored_during_startup_grace(self) -> None:
+        self.assertFalse(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("0"),
+                current=Decimal("2.67"),
+                continuous_presence=True,
+                previous_present_polls=5,
+                zero_rise_grace_elapsed=False,
+            )
+        )
+
+    def test_stable_zero_to_positive_change_is_detected(self) -> None:
+        self.assertTrue(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("0"),
+                current=Decimal("2.67"),
+                continuous_presence=True,
+                previous_present_polls=5,
+                zero_rise_grace_elapsed=True,
+            )
+        )
+
+    def test_unchanged_positive_index_is_not_detected(self) -> None:
+        self.assertFalse(
+            gas_monitor.is_confirmed_gas_index_change(
+                previous=Decimal("2.67"),
+                current=Decimal("2.67"),
+                continuous_presence=True,
+                previous_present_polls=5,
+                zero_rise_grace_elapsed=True,
+            )
+        )
+
     def test_drift_at_target_is_zero(self) -> None:
         observed = datetime(2026, 8, 25, 23, 45)
         self.assertEqual(gas_monitor.circular_drift_minutes(observed, "23:45:00"), 0)
