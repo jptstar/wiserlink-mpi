@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 
 _MINUTES_PER_DAY = 24 * 60
 
@@ -48,6 +49,36 @@ def circular_drift_minutes(observed: datetime, target: str | time) -> int:
 def next_estimated_reading(last_detected: datetime | None) -> datetime | None:
     """Estimate the next autonomous MPE transmission at +24 hours."""
     return last_detected + timedelta(hours=24) if last_detected else None
+
+
+def is_confirmed_gas_index_change(
+    *,
+    previous: Decimal | None,
+    current: Decimal,
+    continuous_presence: bool,
+    previous_present_polls: int,
+    zero_rise_grace_elapsed: bool,
+) -> bool:
+    """Return whether one observed gas-index change is a usable reading event.
+
+    Normal positive-to-positive index changes are accepted as soon as the same
+    gas meter was present on the previous poll. A zero-to-positive transition is
+    also meaningful on real EER31600/MPR installations, but only after the gas
+    meter has remained present for multiple prior polls and the startup/reboot
+    grace period has elapsed. This keeps a delayed cache restoration immediately
+    after HA/MIP startup from being mistaken for the autonomous MPE publication.
+    """
+    if not continuous_presence or previous is None:
+        return False
+    if current <= 0 or current == previous:
+        return False
+    if previous > 0:
+        return True
+    return (
+        previous == 0
+        and previous_present_polls >= 2
+        and zero_rise_grace_elapsed
+    )
 
 
 def should_correct_drift(
