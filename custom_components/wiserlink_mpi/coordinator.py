@@ -24,13 +24,19 @@ from .const import (
     DEFAULT_GAS_TOLERANCE_MINUTES,
     DOMAIN,
 )
-from .gas_monitor import circular_drift_minutes, next_estimated_reading
+from .gas_monitor import (
+    circular_drift_minutes,
+    is_confirmed_gas_index_change,
+    next_estimated_reading,
+)
 from .meter import is_gas_meter
 from .validation import snapshot_anomalies
 
 _LOGGER = logging.getLogger(__name__)
 _CONFIRM_DELAY_SECONDS = 1.0
 _REBOOT_GRACE_SECONDS = 90.0
+_GAS_ZERO_RISE_GRACE_SECONDS = 90.0
+_GAS_ZERO_RISE_MIN_PREVIOUS_POLLS = 2
 _STORAGE_VERSION = 1
 
 
@@ -79,10 +85,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_last_reboot_reason: str | None = None
 
         # Presence continuity is intentionally not persisted. After every HA or
-        # Wiser restart, the first positive gas value is a baseline only. This
-        # prevents a cached 0 -> full index restoration from being mistaken for
-        # the autonomous daily MPE publication.
+        # Wiser restart, the first positive gas value is a baseline only. A
+        # zero-to-positive transition may later be accepted once the meter has
+        # stayed present for multiple polls and this grace period has expired.
         self._gas_present_previous_poll = False
+        self._gas_present_poll_count = 0
+        self._gas_zero_rise_grace_until = (
+            time.monotonic() + _GAS_ZERO_RISE_GRACE_SECONDS
+        )
 
     async def async_initialize(self) -> None:
         """Load persistent gas observation history before first polling."""
@@ -92,6 +102,10 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_last_reboot_at = self._parse_datetime(saved.get("last_reboot_at"))
         self._gas_last_reboot_reason = saved.get("last_reboot_reason")
         self._gas_present_previous_poll = False
+        self._gas_present_poll_count = 0
+        self._gas_zero_rise_grace_until = (
+            time.monotonic() + _GAS_ZERO_RISE_GRACE_SECONDS
+        )
         await self._async_save_gas_state()
 
     @staticmethod
@@ -138,6 +152,14 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         meters = data.get("UsageMeterList", [])
         return meters if isinstance(meters, list) else []
 
+    def _reset_gas_presence_baseline(self) -> None:
+        """Require fresh stable presence before accepting a zero-to-positive rise."""
+        self._gas_present_previous_poll = False
+        self._gas_present_poll_count = 0
+        self._gas_zero_rise_grace_until = (
+            time.monotonic() + _GAS_ZERO_RISE_GRACE_SECONDS
+        )
+
     async def _async_observe_gas_reading(self, data: dict) -> None:
         """Observe real gas index changes without treating cache restoration as a read."""
         gas_meter = next(
@@ -149,7 +171,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             None,
         )
         if gas_meter is None:
-            self._gas_present_previous_poll = False
+            self._reset_gas_presence_baseline()
             return
 
         raw = self._decimal(gas_meter.get("EnergyConsumed"))
@@ -157,27 +179,28 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
             return
 
         continuous_presence = self._gas_present_previous_poll
+        previous_present_polls = self._gas_present_poll_count
         self._gas_present_previous_poll = True
+        self._gas_present_poll_count += 1
+
         previous = self._gas_last_raw_value
         self._gas_last_raw_value = raw
+        zero_rise_grace_elapsed = time.monotonic() >= self._gas_zero_rise_grace_until
 
-        # Only a positive change observed while the same gas meter remained
-        # present across consecutive polls is considered a candidate publication.
-        # 0 -> full index, meter absent -> present and first startup samples are
-        # baselines, not daily-relève timestamps.
-        detected = (
-            continuous_presence
-            and previous is not None
-            and previous > 0
-            and raw > 0
-            and raw != previous
+        detected = is_confirmed_gas_index_change(
+            previous=previous,
+            current=raw,
+            continuous_presence=continuous_presence,
+            previous_present_polls=previous_present_polls,
+            zero_rise_grace_elapsed=zero_rise_grace_elapsed,
         )
         if detected:
             detected_at = dt_util.now()
             self._gas_last_detected_at = detected_at
             _LOGGER.info(
-                "Variation réelle de l’index gaz détectée à %s, index=%s m³",
+                "Variation réelle de l’index gaz détectée à %s, index %s -> %s m³",
                 detected_at.isoformat(timespec="seconds"),
+                previous,
                 raw,
             )
 
@@ -304,7 +327,7 @@ class WiserLinkCoordinator(DataUpdateCoordinator[dict]):
         self._gas_last_reboot_at = now
         self._gas_last_reboot_reason = reason
         self._reboot_grace_until = time.monotonic() + _REBOOT_GRACE_SECONDS
-        self._gas_present_previous_poll = False
+        self._reset_gas_presence_baseline()
         await self._async_save_gas_state()
         _LOGGER.warning("Redémarrage Wiser MIP demandé manuellement: %s", reason)
 
